@@ -1,0 +1,17 @@
+# 源码文件统一用 LF（跨平台兼容）
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.md text eol=lf
+*.env.example text eol=lf
+
+# Windows 脚本保留 CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制文件不做转换
+*.ico binary
+*.svg binary
+*.png binary
