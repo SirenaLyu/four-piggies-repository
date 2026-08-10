@@ -1,24 +1,6 @@
-import { createOpenAI } from "@ai-sdk/openai";
 import { createClient } from "@supabase/supabase-js";
 import { convertToModelMessages, createTextStreamResponse, embed, streamText } from "ai";
-
-// ===== 双模型客户端 =====
-
-// chatClient: 科大 API，用于最终回答问题
-const chatClient = createOpenAI({
-  baseURL: process.env.OPENAI_BASE_URL,
-  apiKey: process.env.OPENAI_API_KEY,
-  name: "campus-chat",
-});
-
-// embeddingClient: 硅基流动 API，用于把用户提问转为向量
-const embeddingClient = createOpenAI({
-  baseURL: process.env.EMBEDDING_BASE_URL!,
-  apiKey: process.env.EMBEDDING_API_KEY!,
-  name: "siliconflow-embed",
-});
-
-const EMBEDDING_MODEL = "BAAI/bge-m3";
+import { chatClient, embeddingClient, EMBEDDING_MODEL, CHAT_MODEL } from "../../lib/ai-clients";
 
 // ===== Supabase 客户端 =====
 const supabase = createClient(
@@ -114,7 +96,7 @@ ${context || "（未找到相关学校资料，请根据你的知识回答）"}`
 
   // 用 chatClient 流式生成回答
   const result = await streamText({
-    model: chatClient.chat("deepseek-v4-flash-ascend"),
+    model: chatClient.chat(CHAT_MODEL),
     system: systemPrompt,
     messages: await convertToModelMessages(messages),
   });
