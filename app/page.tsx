@@ -5,10 +5,9 @@ import { TextStreamChatTransport, type UIMessage, type FileUIPart } from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   downloadExportFile,
-  downloadTextFile,
   type ExportFileDescriptor,
 } from "./lib/export";
-import { languageToExtension, parseCodeBlocks } from "./lib/markdown";
+import { MarkdownRenderer } from "./components/MarkdownRenderer";
 
 // ===== 本地会话持久化 =====
 
@@ -263,13 +262,15 @@ export default function Home() {
   }, [messages]);
 
   // 持久化当前会话的消息
+  // 用 messages 长度 + 末条消息 id 作为内容指纹，仅依赖 messages/activeId/hydrated，
+  // 不依赖 conversations，避免 updatedAt 每次刷新导致死循环
+  const messagesFingerprint = `${messages.length}:${messages.at(-1)?.id ?? ""}`;
   useEffect(() => {
     if (!hydrated) return;
     if (messages.length === 0) return;
     saveConversationMessages(activeId, messages);
 
-    // 更新或新建会话摘要
-    const prev = conversations;
+    const prev = conversationsRef.current;
     const existing = prev.find((c) => c.id === activeId);
     const firstUserText = messages
       .filter((m) => m.role === "user")
@@ -283,25 +284,32 @@ export default function Home() {
     const title = isRealTitle
       ? existing!.title
       : firstUserText?.slice(0, 20) || "新对话";
-    const next: ConversationSummary = {
-      id: activeId,
-      title,
-      createdAt: existing?.createdAt ?? Date.now(),
-      updatedAt: Date.now(),
-    };
-    const merged = existing
-      ? prev.map((c) => (c.id === activeId ? next : c))
-      : [next, ...prev];
-    // 仅当列表确有变化时才更新，避免在 effect 中触发不必要的级联渲染
-    if (
-      merged.length !== prev.length ||
-      merged.some((c, i) => c.id !== prev[i]?.id || c.updatedAt !== prev[i]?.updatedAt)
-    ) {
-      saveConversations(merged);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setConversations(merged);
+
+    // 已存在且标题未变 → 不更新（避免死循环）
+    if (existing && existing.title === title) return;
+
+    let merged: ConversationSummary[];
+    if (existing) {
+      merged = prev.map((c) =>
+        c.id === activeId ? { ...c, title, updatedAt: Date.now() } : c,
+      );
+    } else {
+      merged = [
+        {
+          id: activeId,
+          title,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+        ...prev,
+      ];
     }
-  }, [messages, activeId, hydrated, conversations]);
+    saveConversations(merged);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setConversations(merged);
+    // 故意不依赖 conversations；用 ref 读取最新值，指纹变化才重跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messagesFingerprint, activeId, hydrated]);
 
   // ===== 事件处理 =====
 
@@ -481,7 +489,7 @@ export default function Home() {
                           暂无问题
                         </div>
                       ) : (
-                        <div className="border-l border-gray-200 ml-1 space-y-0.5">
+                        <div className="relative ml-2 pl-4 border-l-2 border-blue-200 space-y-1">
                           {userNodes.map((n, i) => (
                             <button
                               key={n.id}
@@ -491,11 +499,11 @@ export default function Home() {
                                 // 切换会话后立即滚动可能未挂载，延迟一帧再尝试
                                 setTimeout(() => scrollToMessage(n.id), 50);
                               }}
-                              className="block w-full text-left text-xs text-gray-600 hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded transition-colors relative"
+                              className="group/node block w-full text-left text-xs text-gray-700 hover:text-blue-700 hover:bg-blue-50 px-2 py-1.5 rounded transition-colors relative"
                               title={n.text}
                             >
-                              <span className="absolute -left-[5px] top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-gray-300 group-hover:bg-blue-400" />
-                              <span className="truncate">
+                              <span className="absolute -left-[21px] top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-blue-400 ring-2 ring-white group-hover/node:bg-blue-600 transition-colors" />
+                              <span className="truncate font-medium">
                                 {i + 1}. {n.text.slice(0, 24)}
                               </span>
                             </button>
@@ -578,7 +586,6 @@ export default function Home() {
           {messages.map((m) => {
             const text = getMessageText(m);
             const files = getMessageFiles(m);
-            const codeBlocks = m.role === "assistant" ? parseCodeBlocks(text) : [];
             const exportsForThis = exportsByMessage[m.id] ?? [];
             const isExportBusy = exportBusy.has(m.id);
             return (
@@ -604,7 +611,7 @@ export default function Home() {
                   )}
 
                   <div
-                    className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                    className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed break-words ${
                       m.role === "user"
                         ? "bg-blue-600 text-white rounded-br-md"
                         : "bg-white text-gray-800 rounded-bl-md shadow-sm"
@@ -617,7 +624,12 @@ export default function Home() {
                         ))}
                       </div>
                     )}
-                    {text}
+                    {text && (
+                      <MarkdownRenderer
+                        content={text}
+                        variant={m.role === "user" ? "user" : "assistant"}
+                      />
+                    )}
                   </div>
 
                   {m.role === "user" && (
@@ -627,29 +639,7 @@ export default function Home() {
                   )}
                 </div>
 
-                {/* AI 回复：代码块下载按钮 */}
-                {m.role === "assistant" && codeBlocks.length > 0 && (
-                  <div className="ml-10 mt-1 flex flex-wrap gap-1.5">
-                    {codeBlocks.map((b, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        onClick={() =>
-                          downloadTextFile(
-                            b.code,
-                            `code-${i + 1}.${languageToExtension(b.language)}`,
-                          )
-                        }
-                        className="text-[11px] px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded-md text-gray-700 transition-colors"
-                        title={`下载 ${b.language} 代码`}
-                      >
-                        ⬇ 下载代码 ({b.language})
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* AI 回复：AI 生成的导出文件卡片 */}
+                {/* AI 回复：AI 生成的导出文件卡片（代码块下载按钮已内置在 MarkdownRenderer 里） */}
                 {m.role === "assistant" && exportsForThis.length > 0 && (
                   <div className="ml-10 mt-2 flex flex-wrap gap-2">
                     {exportsForThis.map((f, i) => (
