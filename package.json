@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "gen-doc": "tsx scripts/generate-doc-pdf.ts"
+    "gen-doc": "tsx scripts/generate-doc-pdf.ts",
+    "crawl": "tsx scripts/crawl-ustc.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.23",
