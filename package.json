@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "gen-doc": "tsx scripts/generate-doc-pdf.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.23",
@@ -15,7 +16,9 @@
     "ai": "^7.0.41",
     "docx": "^9.7.1",
     "jspdf": "^4.2.1",
+    "marked": "^18.0.9",
     "next": "16.2.12",
+    "puppeteer-core": "^25.5.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
@@ -29,6 +32,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.12",
     "tailwindcss": "^4",
+    "tsx": "^4.23.12",
     "typescript": "^5"
   }
 }
