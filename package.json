@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "gen-doc": "tsx scripts/generate-doc-pdf.ts",
-    "crawl": "tsx scripts/crawl-ustc.ts"
+    "crawl": "tsx scripts/crawl-ustc.ts",
+    "feed-crawled": "tsx scripts/feed_crawled_data.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.23",
