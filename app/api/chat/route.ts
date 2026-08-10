@@ -168,11 +168,27 @@ async function searchRelevantDocuments(userQuery: string): Promise<string> {
     searchCourses(embedding),
   ]);
 
-  // 3. 意图命中时再查替代池(从 userQuery 里抠出课程名,简单做法:取最后 8 字)
+  // 3. 意图命中时再查替代池 — 从 userQuery 抠出课程名
+  //    匹配两种语序:
+  //      "X 能替代 什么课"   → 课程名 X 在关键词前
+  //      "X 替代 Y"          → 课程名 X 在关键词前
+  //      "能替代 X 吗"       → 课程名 X 在关键词后
+  //    去掉疑问词/助词后取剩余 token,再 fallback 用整句
   let substituteText = "";
   if (isCourseSubstituteQuery(userQuery)) {
-    const courseName = userQuery.replace(/.*?(?:替代|代替|替换|换课|等效)/, "").trim();
-    substituteText = await searchSubstitutes(courseName || userQuery);
+    const cleaned = userQuery
+      .replace(/[???！!。.,，、]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    // 先尝试:课程名在关键词前
+    const beforeMatch = cleaned.match(/^(.+?)\s*(?:能|可以|可)?(?:替代|代替|替换|换课|等效)/);
+    // 再尝试:课程名在关键词后
+    const afterMatch = cleaned.match(/(?:替代|代替|替换|换课|等效)(?:什么|哪些|啥|成|为|做)?\s*(.+)$/);
+    const courseName =
+      (beforeMatch?.[1] && beforeMatch[1].length >= 2 ? beforeMatch[1] : "") ||
+      (afterMatch?.[1] && afterMatch[1].length >= 2 ? afterMatch[1] : "") ||
+      cleaned;
+    substituteText = await searchSubstitutes(courseName);
   }
 
   return [docText, poiText, courseText, substituteText]
