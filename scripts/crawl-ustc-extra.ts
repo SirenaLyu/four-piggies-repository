@@ -6,11 +6,14 @@
  *   2. 通知   https://www.teach.ustc.edu.cn/notice/feed          (RSS feed)
  *   3. 图书馆 https://lib.ustc.edu.cn/本馆概况/日常开放时间/     (HTML 解析)
  *   4. 校车   手动录入(用户 2026-08-15 提供的暑期时刻表)
+ *   5. 奖助学金/资助  https://stuhome.ustc.edu.cn/{column}/list.htm  (HTML 解析)
+ *      栏目:2298 公示栏 / 2306 奖助学金 / 2305 助学贷款 / 2304 勤工助学
  *
  * 与 crawl-ustc.ts 独立,不污染 8/10 已验证的 POI/课程爬虫。
  * 用法：npx tsx scripts/crawl-ustc-extra.ts
  *      npx tsx scripts/crawl-ustc-extra.ts --only=calendar
  *      npx tsx scripts/crawl-ustc-extra.ts --only=notices,library
+ *      npx tsx scripts/crawl-ustc-extra.ts --only=scholarships --scholarship-pages=4
  */
 
 import { promises as fs } from "node:fs";
@@ -199,7 +202,7 @@ function findPrevCalendarUrl(html: string): string | null {
 }
 
 async function fetchCalendar(): Promise<CalendarEvent[]> {
-  console.log("\n[1/4] 抓取校历 (teach.ustc.edu.cn/calendar)");
+  console.log("\n[1/5] 抓取校历 (teach.ustc.edu.cn/calendar)");
   const allEvents: CalendarEvent[] = [];
   // 从最新页面 20135(2026 秋季)开始,往前链式爬 4 个学期
   let url: string | null = "https://www.teach.ustc.edu.cn/calendar/20135.html";
@@ -264,7 +267,7 @@ function parseNoticeRss(xml: string): Notice[] {
 }
 
 async function fetchNotices(): Promise<Notice[]> {
-  console.log("\n[2/4] 抓取教务处通知 (teach.ustc.edu.cn/notice/feed)");
+  console.log("\n[2/5] 抓取教务处通知 (teach.ustc.edu.cn/notice/feed)");
   const url = "https://www.teach.ustc.edu.cn/notice/feed";
   try {
     const xml = await fetchHtml(url, "https://www.teach.ustc.edu.cn/");
@@ -373,7 +376,7 @@ function parseLibraryHtml(html: string, sourceUrl: string): LibraryHour[] {
 }
 
 async function fetchLibraryHours(): Promise<LibraryHour[]> {
-  console.log("\n[3/4] 抓取图书馆开放时间 (lib.ustc.edu.cn/本馆概况/日常开放时间)");
+  console.log("\n[3/5] 抓取图书馆开放时间 (lib.ustc.edu.cn/本馆概况/日常开放时间)");
   const url = "https://lib.ustc.edu.cn/%e6%9c%ac%e9%a6%86%e6%a6%82%e5%86%b5/%e6%97%a5%e5%b8%b8%e5%bc%80%e6%94%be%e6%97%b6%e9%97%b4/";
   try {
     const html = await fetchHtml(url, "https://lib.ustc.edu.cn/");
@@ -485,6 +488,134 @@ function buildShuttleData(): ShuttleTrip[] {
   return trips;
 }
 
+// ===== 5. 奖助学金/资助通知(学生工作部 stuhome.ustc.edu.cn) =====
+
+interface ScholarshipNotice {
+  title: string;
+  url: string;
+  publish_date: string;
+  publisher: string;
+  category: string;
+  body_preview: string;
+}
+
+/** 学工部栏目:路径 → 中文名 */
+const STUHOME_COLUMNS: Array<{ path: string; name: string; max_pages: number }> = [
+  { path: "2298", name: "公示栏", max_pages: 6 }, // 含各类奖学金获奖名单公示
+  { path: "2306", name: "奖助学金", max_pages: 3 }, // 奖助学金政策类通知
+  { path: "2305", name: "助学贷款", max_pages: 3 },
+  { path: "2304", name: "勤工助学", max_pages: 3 },
+];
+
+/** 从列表页提取 (title, url, publish_date) 三元组 */
+function parseScholarshipListHtml(html: string): Array<{ title: string; url: string; publish_date: string }> {
+  const items: Array<{ title: string; url: string; publish_date: string }> = [];
+  // <li class="news ...">
+  //   <span class="news_title"><a href='...' title='...'>...</a></span>
+  //   <span class="news_meta">2026-06-04</span>
+  // </li>
+  const liRegex = /<li class="news[^"]*"[^>]*>[\s\S]*?<\/li>/g;
+  let m: RegExpExecArray | null;
+  while ((m = liRegex.exec(html)) !== null) {
+    const li = m[0];
+    const aMatch = li.match(/<a href='([^']+)'[^>]*title='([^']+)'/);
+    const dateMatch = li.match(/<span class="news_meta">(\d{4}-\d{2}-\d{2})<\/span>/);
+    if (!aMatch) continue;
+    const url = aMatch[1].startsWith("http") ? aMatch[1] : `https://stuhome.ustc.edu.cn${aMatch[1]}`;
+    items.push({
+      title: aMatch[2].replace(/"/g, '"').replace(/&/g, "&").replace(/</g, "<").replace(/>/g, ">").trim(),
+      url,
+      publish_date: dateMatch?.[1] ?? "",
+    });
+  }
+  return items;
+}
+
+/** 从详情页提取 publisher 与 body_preview(剥标签 + 截 200 字) */
+function parseScholarshipDetailHtml(html: string): { publisher: string; body_preview: string } {
+  const publisher = html.match(/<span class="arti_publisher">发布者：([^<]+)<\/span>/)?.[1]?.trim() ?? "";
+  const bodyMatch = html.match(/<div class='wp_articlecontent'>([\s\S]*?)<\/div>/);
+  let body_preview = "";
+  if (bodyMatch) {
+    body_preview = bodyMatch[1]
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/"/g, '"')
+      .replace(/&/g, "&")
+      .replace(/</g, "<")
+      .replace(/>/g, ">")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 200);
+  }
+  return { publisher, body_preview };
+}
+
+/**
+ * 抓取学工部 4 个栏目的列表 + 详情。
+ * @param maxPagesPerColumn 每个栏目最多抓几页(默认 3),用 --scholarship-pages 覆盖
+ */
+async function fetchScholarships(maxPagesPerColumn: number): Promise<ScholarshipNotice[]> {
+  console.log(`\n[5/5] 抓取奖助学金/资助通知 (stuhome.ustc.edu.cn,每栏目 ${maxPagesPerColumn} 页)`);
+  const all: ScholarshipNotice[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const col of STUHOME_COLUMNS) {
+    const pages = Math.min(maxPagesPerColumn, col.max_pages);
+    console.log(`  · ${col.name} (/${col.path}/)  最多 ${pages} 页`);
+    for (let p = 1; p <= pages; p++) {
+      const listUrl = p === 1
+        ? `https://stuhome.ustc.edu.cn/${col.path}/list.htm`
+        : `https://stuhome.ustc.edu.cn/${col.path}/list${p}.htm`;
+      try {
+        const html = await fetchHtml(listUrl, "https://stuhome.ustc.edu.cn/");
+        const items = parseScholarshipListHtml(html);
+        if (items.length === 0) {
+          console.log(`    p${p}: 0 条,停止本栏目`);
+          break;
+        }
+        console.log(`    p${p}: ${items.length} 条`);
+        for (const it of items) {
+          if (seenUrls.has(it.url)) continue;
+          seenUrls.add(it.url);
+          all.push({
+            title: it.title,
+            url: it.url,
+            publish_date: it.publish_date,
+            publisher: "",
+            category: col.name,
+            body_preview: "",
+          });
+        }
+      } catch (err) {
+        console.error(`    p${p} 失败:`, (err as Error).message);
+        break;
+      }
+      await sleep(200);
+    }
+  }
+
+  console.log(`  列表汇总:${all.length} 条(去重后),开始抓详情...`);
+
+  // 抓详情(publisher + body_preview)
+  let done = 0;
+  for (const row of all) {
+    try {
+      const html = await fetchHtml(row.url, "https://stuhome.ustc.edu.cn/");
+      const { publisher, body_preview } = parseScholarshipDetailHtml(html);
+      row.publisher = publisher;
+      row.body_preview = body_preview;
+    } catch (err) {
+      console.error(`    详情失败 ${row.url}:`, (err as Error).message);
+    }
+    done++;
+    if (done % 25 === 0) console.log(`    进度 ${done}/${all.length}`);
+    await sleep(200);
+  }
+
+  return all;
+}
+
 // ===== 主流程 =====
 
 async function main() {
@@ -495,6 +626,10 @@ async function main() {
   const onlyArg = process.argv.find((a) => a.startsWith("--only="));
   const onlySet = onlyArg ? onlyArg.slice(7).split(",").map((s) => s.trim()) : null;
   const shouldRun = (name: string): boolean => !onlySet || onlySet.includes(name);
+
+  // 解析 --scholarship-pages 参数(每栏目抓几页,默认 3)
+  const scholarPagesArg = process.argv.find((a) => a.startsWith("--scholarship-pages="));
+  const scholarshipPages = scholarPagesArg ? parseInt(scholarPagesArg.slice(20)) || 3 : 3;
 
   if (shouldRun("calendar")) {
     const rows = await fetchCalendar();
@@ -528,7 +663,7 @@ async function main() {
 
   if (shouldRun("shuttle")) {
     const rows = buildShuttleData();
-    console.log(`\n[4/4] 校车时刻表(手动录入): ${rows.length} 条`);
+    console.log(`\n[4/5] 校车时刻表(手动录入): ${rows.length} 条`);
     await writeJsonAndCsv("shuttle", rows, [
       "route_name",
       "direction",
@@ -543,6 +678,18 @@ async function main() {
     ]);
   }
 
+  if (shouldRun("scholarships")) {
+    const rows = await fetchScholarships(scholarshipPages);
+    await writeJsonAndCsv("scholarships", rows, [
+      "title",
+      "url",
+      "publish_date",
+      "publisher",
+      "category",
+      "body_preview",
+    ]);
+  }
+
   console.log("\n=== 完成 ===");
   const files = await fs.readdir(OUTPUT_DIR);
   for (const f of files) {
@@ -550,7 +697,8 @@ async function main() {
       f.startsWith("calendar") ||
       f.startsWith("notices") ||
       f.startsWith("library-hours") ||
-      f.startsWith("shuttle")
+      f.startsWith("shuttle") ||
+      f.startsWith("scholarships")
     ) {
       const stat = await fs.stat(path.join(OUTPUT_DIR, f));
       console.log(`  ${f}  (${(stat.size / 1024).toFixed(1)} KB)`);
