@@ -3,11 +3,14 @@
  *
  * 数据源：
  *   1. 校历   https://www.teach.ustc.edu.cn/calendar/{ID}.html  (HTML 表格解析)
- *   2. 校车   手动录入(用户 2026-08-15 提供的暑期时刻表)
+ *   2. 通知   https://www.teach.ustc.edu.cn/notice/feed          (RSS feed)
+ *   3. 图书馆 https://lib.ustc.edu.cn/本馆概况/日常开放时间/     (HTML 解析)
+ *   4. 校车   手动录入(用户 2026-08-15 提供的暑期时刻表)
  *
  * 与 crawl-ustc.ts 独立,不污染 8/10 已验证的 POI/课程爬虫。
  * 用法：npx tsx scripts/crawl-ustc-extra.ts
  *      npx tsx scripts/crawl-ustc-extra.ts --only=calendar
+ *      npx tsx scripts/crawl-ustc-extra.ts --only=notices,library
  */
 
 import { promises as fs } from "node:fs";
@@ -196,7 +199,7 @@ function findPrevCalendarUrl(html: string): string | null {
 }
 
 async function fetchCalendar(): Promise<CalendarEvent[]> {
-  console.log("\n[1/2] 抓取校历 (teach.ustc.edu.cn/calendar)");
+  console.log("\n[1/4] 抓取校历 (teach.ustc.edu.cn/calendar)");
   const allEvents: CalendarEvent[] = [];
   // 从最新页面 20135(2026 秋季)开始,往前链式爬 4 个学期
   let url: string | null = "https://www.teach.ustc.edu.cn/calendar/20135.html";
@@ -216,6 +219,171 @@ async function fetchCalendar(): Promise<CalendarEvent[]> {
     await sleep(200);
   }
   return allEvents;
+}
+
+// ===== 2. 教务处通知 =====
+
+interface Notice {
+  title: string;
+  url: string;
+  publish_date: string;
+  author: string;
+  category: string;
+  body_preview: string;
+}
+
+/** 从 RSS item 提取通知;body_preview 取 description 前 200 字 */
+function parseNoticeRss(xml: string): Notice[] {
+  const notices: Notice[] = [];
+  const items = xml.split("<item>").slice(1);
+  for (const item of items) {
+    const title = item.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/)?.[1]?.trim() ?? "";
+    const url = item.match(/<link>([\s\S]*?)<\/link>/)?.[1]?.trim() ?? "";
+    const pubDate = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1]?.trim() ?? "";
+    const author = item.match(/<dc:creator><!\[CDATA\[([\s\S]*?)\]\]><\/dc:creator>/)?.[1]?.trim() ?? "";
+    const category = item.match(/<category><!\[CDATA\[([\s\S]*?)\]\]><\/category>/)?.[1]?.trim() ?? "";
+    const desc = item.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/)?.[1] ?? "";
+    // 去掉 HTML 标签 + 解码常见实体 + 截断 200 字
+    const bodyPreview = desc
+      .replace(/<[^>]+>/g, "")
+      .replace(/&#8230;|&hellip;/g, "…")
+      .replace(/"/g, '"')
+      .replace(/&#39;|'/g, "'")
+      .replace(/</g, "<")
+      .replace(/>/g, ">")
+      .replace(/&/g, "&")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 200);
+    // pubDate "Fri, 31 Jul 2026 12:07:58 +0000" → "2026-07-31"
+    const dateObj = new Date(pubDate);
+    const publish_date = isNaN(dateObj.getTime()) ? pubDate : dateObj.toISOString().slice(0, 10);
+    notices.push({ title, url, publish_date, author, category, body_preview: bodyPreview });
+  }
+  return notices;
+}
+
+async function fetchNotices(): Promise<Notice[]> {
+  console.log("\n[2/4] 抓取教务处通知 (teach.ustc.edu.cn/notice/feed)");
+  const url = "https://www.teach.ustc.edu.cn/notice/feed";
+  try {
+    const xml = await fetchHtml(url, "https://www.teach.ustc.edu.cn/");
+    const notices = parseNoticeRss(xml);
+    console.log(`  ${notices.length} 条通知`);
+    return notices;
+  } catch (err) {
+    console.error(`  失败:`, (err as Error).message);
+    return [];
+  }
+}
+
+// ===== 3. 图书馆开放时间 =====
+
+interface LibraryHour {
+  branch: string;
+  floor: string;
+  service: string;
+  weekday_hours: string;
+  weekend_hours: string;
+  phone: string;
+  source_url: string;
+}
+
+/**
+ * 解析图书馆"日常开放时间"页面。
+ * 页面结构:1 个 <table> 含多个 <tbody>,每个 tbody 对应一个分馆(东/西/高新)。
+ * 每个表格首行是表头(业务地点/周一至周五/周六至周日/联系电话),
+ * 之后每行:<td rowspan=N>东 区</td> <td>1楼西</td> <td>业务内容</td> <td>8:00-12:00 14:00-18:00</td> <td>——</td> <td>电话</td>
+ *   rowspan 月份 td 只在该区域第一行出现,后续行省略。
+ *   时间列可能含两个时间段(上午+下午),用空格分隔;"——" 表示不开放。
+ * 策略:逐表逐行解析,用 rowspan 保持 branch 状态,提取楼层/业务/时间/电话。
+ */
+function parseLibraryHtml(html: string, sourceUrl: string): LibraryHour[] {
+  const hours: LibraryHour[] = [];
+
+  // 去掉 script/style
+  const cleaned = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<style[\s\S]*?<\/style>/g, "");
+
+  // 找所有 <table>...</table>
+  const tables = cleaned.match(/<table[^>]*>[\s\S]*?<\/table>/g) ?? [];
+  let currentBranch = "";
+
+  for (const table of tables) {
+    // 按 <tr...> 拆行(标签可能带属性)
+    const rows = table.split(/<tr[^>]*>/).slice(1);
+    for (const row of rows) {
+      const tdRegex = /<td([^>]*)>([\s\S]*?)<\/td>/g;
+      const cells: Array<{ attrs: string; html: string; text: string }> = [];
+      let m: RegExpExecArray | null;
+      while ((m = tdRegex.exec(row)) !== null) {
+        const inner = m[2];
+        const text = inner.replace(/<br\s*\/?>/g, " ").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+        cells.push({ attrs: m[1], html: inner, text });
+      }
+      if (cells.length === 0) continue;
+
+      // 跳过表头行(含"业务地点"或"周一至周五")
+      if (cells.some((c) => c.text.includes("业务地点") || c.text.includes("周一至周五"))) continue;
+
+      // 找 branch td(rowspan + 含"区"或"高新")
+      for (const c of cells) {
+        if (c.attrs.includes("rowspan")) {
+          const t = c.text.replace(/\s/g, "");
+          if (t.includes("东区") || t.includes("西区") || t.includes("南区") || t.includes("高新")) {
+            currentBranch = t;
+            break;
+          }
+        }
+      }
+
+      // 提取楼层/业务/时间/电话:假设顺序为 [branch?, floor, service, weekday_hours, weekend_hours, phone]
+      // 移除 branch cell 后剩余 cells
+      const dataCells = cells.filter((c) => !(c.attrs.includes("rowspan") && (c.text.includes("区") || c.text.includes("高新"))));
+      if (dataCells.length < 2) continue;
+
+      // 简化映射:第一个是 floor,第二个是 service,之后找含时间格式的列
+      const floor = dataCells[0]?.text ?? "";
+      const service = dataCells[1]?.text ?? "";
+      let weekday_hours = "";
+      let weekend_hours = "";
+      let phone = "";
+      for (const c of dataCells.slice(2)) {
+        if (/\d{1,2}:\d{2}/.test(c.text) || c.text === "——") {
+          if (!weekday_hours) weekday_hours = c.text;
+          else if (!weekend_hours) weekend_hours = c.text;
+        } else if (/^\d{6,}/.test(c.text.replace(/[^0-9]/g, "")) || /[0-9]{6,}/.test(c.text)) {
+          if (!phone) phone = c.text;
+        }
+      }
+      // 只有有时间或服务的行才记录
+      if (!weekday_hours && !weekend_hours && !service) continue;
+      hours.push({
+        branch: currentBranch || "未分类",
+        floor,
+        service,
+        weekday_hours,
+        weekend_hours,
+        phone,
+        source_url: sourceUrl,
+      });
+    }
+  }
+
+  return hours;
+}
+
+async function fetchLibraryHours(): Promise<LibraryHour[]> {
+  console.log("\n[3/4] 抓取图书馆开放时间 (lib.ustc.edu.cn/本馆概况/日常开放时间)");
+  const url = "https://lib.ustc.edu.cn/%e6%9c%ac%e9%a6%86%e6%a6%82%e5%86%b5/%e6%97%a5%e5%b8%b8%e5%bc%80%e6%94%be%e6%97%b6%e9%97%b4/";
+  try {
+    const html = await fetchHtml(url, "https://lib.ustc.edu.cn/");
+    const hours = parseLibraryHtml(html, url);
+    console.log(`  ${hours.length} 条时间记录`);
+    return hours;
+  } catch (err) {
+    console.error(`  失败:`, (err as Error).message);
+    return [];
+  }
 }
 
 // ===== 2. 校车时刻表(手动录入) =====
@@ -340,9 +508,27 @@ async function main() {
     ]);
   }
 
+  if (shouldRun("notices")) {
+    const rows = await fetchNotices();
+    await writeJsonAndCsv("notices", rows, ["title", "url", "publish_date", "author", "category", "body_preview"]);
+  }
+
+  if (shouldRun("library")) {
+    const rows = await fetchLibraryHours();
+    await writeJsonAndCsv("library-hours", rows, [
+      "branch",
+      "floor",
+      "service",
+      "weekday_hours",
+      "weekend_hours",
+      "phone",
+      "source_url",
+    ]);
+  }
+
   if (shouldRun("shuttle")) {
     const rows = buildShuttleData();
-    console.log(`\n[2/2] 校车时刻表(手动录入): ${rows.length} 条`);
+    console.log(`\n[4/4] 校车时刻表(手动录入): ${rows.length} 条`);
     await writeJsonAndCsv("shuttle", rows, [
       "route_name",
       "direction",
@@ -360,7 +546,12 @@ async function main() {
   console.log("\n=== 完成 ===");
   const files = await fs.readdir(OUTPUT_DIR);
   for (const f of files) {
-    if (f.startsWith("calendar") || f.startsWith("shuttle")) {
+    if (
+      f.startsWith("calendar") ||
+      f.startsWith("notices") ||
+      f.startsWith("library-hours") ||
+      f.startsWith("shuttle")
+    ) {
       const stat = await fs.stat(path.join(OUTPUT_DIR, f));
       console.log(`  ${f}  (${(stat.size / 1024).toFixed(1)} KB)`);
     }
