@@ -9,6 +9,7 @@
     "lint": "eslint",
     "gen-doc": "tsx scripts/generate-doc-pdf.ts",
     "crawl": "tsx scripts/crawl-ustc.ts",
+    "crawl-extra": "tsx scripts/crawl-ustc-extra.ts",
     "feed-crawled": "tsx scripts/feed_crawled_data.ts"
   },
   "dependencies": {

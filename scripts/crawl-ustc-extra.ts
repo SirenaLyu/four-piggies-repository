@@ -1,0 +1,373 @@
+/**
+ * 爬取 USTC 校园 AI 助手补充资料 → D:\ustc-data\
+ *
+ * 数据源：
+ *   1. 校历   https://www.teach.ustc.edu.cn/calendar/{ID}.html  (HTML 表格解析)
+ *   2. 校车   手动录入(用户 2026-08-15 提供的暑期时刻表)
+ *
+ * 与 crawl-ustc.ts 独立,不污染 8/10 已验证的 POI/课程爬虫。
+ * 用法：npx tsx scripts/crawl-ustc-extra.ts
+ *      npx tsx scripts/crawl-ustc-extra.ts --only=calendar
+ */
+
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
+const OUTPUT_DIR = "D:\\ustc-data";
+
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+
+// ===== 通用工具 =====
+
+/** CSV 单元格转义:复用 crawl-ustc.ts:117 的逻辑,抽成通用函数 */
+function toCsvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v).replace(/"/g, '""');
+  return /[",\n\r]/.test(s) ? `"${s}"` : s;
+}
+
+/** 写 JSON + CSV(带 BOM) */
+async function writeJsonAndCsv(name: string, rows: Array<Record<string, unknown>>, cols: string[]): Promise<void> {
+  await fs.writeFile(path.join(OUTPUT_DIR, `${name}.json`), JSON.stringify(rows, null, 2), "utf-8");
+  const header = cols.join(",");
+  const body = rows.map((r) => cols.map((c) => toCsvCell(r[c])).join(",")).join("\n");
+  const csv = body ? `${header}\n${body}` : header;
+  await fs.writeFile(path.join(OUTPUT_DIR, `${name}.csv`), "﻿" + csv, "utf-8");
+}
+
+/** 礼貌延时 */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** fetch HTML,带 UA + Referer */
+async function fetchHtml(url: string, referer?: string): Promise<string> {
+  const headers: Record<string, string> = {
+    "User-Agent": UA,
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  };
+  if (referer) headers.Referer = referer;
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return await res.text();
+}
+
+// ===== 1. 校历 =====
+
+interface CalendarEvent {
+  academic_year: string;
+  semester: string;
+  start_date: string;
+  end_date: string;
+  event_title: string;
+  source_url: string;
+}
+
+/** 中文月名 → 数字:一→01,...,十二→12 */
+const CN_MONTH_MAP: Record<string, string> = {
+  一: "01", 二: "02", 三: "03", 四: "04", 五: "05", 六: "06",
+  七: "07", 八: "08", 九: "09", 十: "10", 十一: "11", 十二: "12",
+};
+
+/**
+ * 解析校历页面 html 表格。
+ * 表格结构(<table class="res-wrap table3 calendar">):
+ *   每行 = 一周(表头顺序 日/一/二/三/四/五/六);
+ *   第一个 td 带 rowspan="N" 是中文月份("八");第二个 td 是教学周标签;
+ *   之后 14 个 td 是 7 个 (日期, 事件) 对。
+ *
+ * 难点:同一行可能跨月(9 月第一行含 8/30, 8/31, 9/1, ..., 9/5),
+ *      日期数字本身不能判断月份。
+ * 方案:用累加法——从第一行 anchor 起按"上一行最后日期 + 1"推断,
+ *      遇到日期数字 < 上一行最后日期 时自动进位到下月。
+ *
+ * 学期从 <caption> 提取,跨年推断:秋季学期 8-12 月用起始年,1-7 月用起始年+1。
+ */
+function parseCalendarHtml(html: string, sourceUrl: string): CalendarEvent[] {
+  const events: CalendarEvent[] = [];
+
+  const capMatch = html.match(/<caption[^>]*>[\s\S]*?（([^）]*学期)）[\s\S]*?<\/caption>/);
+  const semesterRaw = capMatch?.[1] ?? "";
+  const semMatch = semesterRaw.match(/^(\d{4})年(.+?)学期$/);
+  const startYear = semMatch ? parseInt(semMatch[1]) : 0;
+  const academic_year = semMatch?.[1] ?? "";
+  const semester = semMatch?.[2] ?? semesterRaw;
+
+  const tbodyMatch = html.match(/<table class="res-wrap table3 calendar">[\s\S]*?<tbody>([\s\S]*?)<\/tbody>/);
+  if (!tbodyMatch) return events;
+  const tbody = tbodyMatch[1];
+
+  const rows = tbody.split(/<tr>/).slice(1);
+
+  let curDate: { y: number; m: number; d: number } | null = null;
+  let pendingMonthFromRowspan: string | null = null;
+  let currentMonth: number = 0;
+  let currentYear: number = startYear;
+
+  for (const row of rows) {
+    const tdRegex = /<td([^>]*)>([\s\S]*?)<\/td>/g;
+    const cells: Array<{ attrs: string; text: string }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = tdRegex.exec(row)) !== null) {
+      cells.push({ attrs: m[1], text: m[2].replace(/<[^>]+>/g, "").trim() });
+    }
+    if (cells.length === 0) continue;
+
+    let monthIdx = -1;
+    for (let i = 0; i < cells.length; i++) {
+      if (cells[i].attrs.includes("rowspan") && CN_MONTH_MAP[cells[i].text]) {
+        monthIdx = i;
+        pendingMonthFromRowspan = cells[i].text;
+        break;
+      }
+    }
+
+    let startIdx: number;
+    if (monthIdx >= 0) startIdx = monthIdx + 2;
+    else startIdx = 1;
+
+    const pairs: Array<{ day: number; event: string }> = [];
+    for (let i = startIdx; i + 1 < cells.length; i += 2) {
+      const dayCell = cells[i].text;
+      const eventCell = cells[i + 1].text;
+      if (!/^\d{1,2}$/.test(dayCell)) continue;
+      pairs.push({ day: parseInt(dayCell), event: eventCell });
+    }
+    if (pairs.length === 0) continue;
+
+    if (curDate === null) {
+      if (pendingMonthFromRowspan && CN_MONTH_MAP[pendingMonthFromRowspan]) {
+        currentMonth = parseInt(CN_MONTH_MAP[pendingMonthFromRowspan]);
+        currentYear = startYear;
+        curDate = { y: currentYear, m: currentMonth, d: pairs[0].day };
+      } else {
+        continue;
+      }
+    }
+
+    for (let i = 0; i < pairs.length; i++) {
+      const { day, event } = pairs[i];
+      if (i === 0 && curDate !== null) {
+        if (day < curDate.d) {
+          currentMonth += 1;
+          if (currentMonth > 12) {
+            currentMonth = 1;
+            currentYear += 1;
+          }
+          curDate = { y: currentYear, m: currentMonth, d: day };
+        } else if (day === curDate.d) {
+          // 同一天(不应发生),不动
+        } else {
+          curDate = { y: currentYear, m: currentMonth, d: day };
+        }
+      } else {
+        curDate = { y: currentYear, m: currentMonth, d: day };
+        if (i > 0 && day < pairs[i - 1].day) {
+          currentMonth += 1;
+          if (currentMonth > 12) {
+            currentMonth = 1;
+            currentYear += 1;
+          }
+          curDate = { y: currentYear, m: currentMonth, d: day };
+        }
+      }
+
+      if (!event) continue;
+      const dateStr = `${curDate.y}-${String(curDate.m).padStart(2, "0")}-${String(curDate.d).padStart(2, "0")}`;
+      events.push({
+        academic_year,
+        semester,
+        start_date: dateStr,
+        end_date: dateStr,
+        event_title: event,
+        source_url: sourceUrl,
+      });
+    }
+  }
+
+  return events;
+}
+
+/** 从校历页面提取 prev 链接(更早的学期) */
+function findPrevCalendarUrl(html: string): string | null {
+  const m = html.match(/<p class="prev"><a href="([^"]+)">/);
+  return m?.[1] ?? null;
+}
+
+async function fetchCalendar(): Promise<CalendarEvent[]> {
+  console.log("\n[1/2] 抓取校历 (teach.ustc.edu.cn/calendar)");
+  const allEvents: CalendarEvent[] = [];
+  // 从最新页面 20135(2026 秋季)开始,往前链式爬 4 个学期
+  let url: string | null = "https://www.teach.ustc.edu.cn/calendar/20135.html";
+  const MAX_SEMESTERS = 4;
+  for (let i = 0; i < MAX_SEMESTERS && url; i++) {
+    try {
+      console.log(`  · ${url}`);
+      const html = await fetchHtml(url, "https://www.teach.ustc.edu.cn/");
+      const events = parseCalendarHtml(html, url);
+      console.log(`    ${events.length} 个事件`);
+      allEvents.push(...events);
+      url = findPrevCalendarUrl(html);
+    } catch (err) {
+      console.error(`    失败:`, (err as Error).message);
+      break;
+    }
+    await sleep(200);
+  }
+  return allEvents;
+}
+
+// ===== 2. 校车时刻表(手动录入) =====
+
+interface ShuttleTrip {
+  route_name: string;
+  direction: string;
+  departure: string;
+  arrival: string;
+  depart_time: string;
+  arrive_time: string;
+  weekday_only: string;
+  period: string;
+  note: string;
+  source: string;
+}
+
+/**
+ * 校车数据来源:用户 2026-08-15 提供的暑期时刻表(2026-08-01 ~ 2026-08-29 工作日)
+ * USTC 公开页面无结构化时刻表,此部分为人工录入。
+ */
+function buildShuttleData(): ShuttleTrip[] {
+  const period = "2026-08-01~2026-08-29";
+  const weekday_only = "true";
+  const source = "manual:用户提供 2026-08-15";
+
+  const trips: ShuttleTrip[] = [];
+
+  // 主线 1:东区 → 西区 → 先研院 → 高新园区
+  const mainLine1 = [
+    ["07:30", "07:40", "08:20"],
+    ["12:30", "12:40", "13:20"],
+    ["18:00", "18:10", "18:50"],
+    ["20:00", "20:10", "20:50"],
+  ];
+  for (const [d, w, g] of mainLine1) {
+    trips.push({
+      route_name: "主线1:东→西→先研院→高新",
+      direction: "去程",
+      departure: "东区",
+      arrival: "高新园区",
+      depart_time: d,
+      arrive_time: g,
+      weekday_only,
+      period,
+      note: `西区 ${w} 发车;先研院即停即走`,
+      source,
+    });
+  }
+
+  // 主线 2:高新园区 → 先研院 → 西区 → 东区
+  const mainLine2 = [
+    ["08:45", "08:50", "09:35"],
+    ["13:30", "13:35", "14:20"],
+    ["19:00", "19:05", "19:50"],
+    ["21:00", "21:05", "21:50"],
+  ];
+  for (const [g, x, d] of mainLine2) {
+    trips.push({
+      route_name: "主线2:高新→先研院→西→东",
+      direction: "返程",
+      departure: "高新园区",
+      arrival: "东区",
+      depart_time: g,
+      arrive_time: d,
+      weekday_only,
+      period,
+      note: `先研院 ${x} 即停即走;西区即停即走`,
+      source,
+    });
+  }
+
+  // 点对点短途线
+  const shortLines: Array<[string, string, string[]]> = [
+    ["东区→南区", "东区", "南区", ["11:40", "17:10", "19:20"]],
+    ["东区→西区", "东区", "西区", ["08:15", "11:30", "14:10", "17:00", "19:00"]],
+    ["西区→东区", "西区", "东区", ["08:25", "11:40", "14:20", "17:10", "19:10"]],
+    ["西区→南区", "西区", "南区", ["11:30", "17:00", "19:10"]],
+    ["南区→东区", "南区", "东区", ["08:00", "14:10", "19:35"]],
+    ["南区→西区", "南区", "西区", ["08:00", "14:10"]],
+  ];
+  for (const [name, dep, arr, times] of shortLines) {
+    for (const t of times) {
+      trips.push({
+        route_name: name,
+        direction: "点对点",
+        departure: dep,
+        arrival: arr,
+        depart_time: t,
+        arrive_time: "",
+        weekday_only,
+        period,
+        note: "始发站满员即发,无固定到达时间",
+        source,
+      });
+    }
+  }
+
+  return trips;
+}
+
+// ===== 主流程 =====
+
+async function main() {
+  console.log(`输出目录: ${OUTPUT_DIR}`);
+  await fs.mkdir(OUTPUT_DIR, { recursive: true });
+
+  // 解析 --only 参数
+  const onlyArg = process.argv.find((a) => a.startsWith("--only="));
+  const onlySet = onlyArg ? onlyArg.slice(7).split(",").map((s) => s.trim()) : null;
+  const shouldRun = (name: string): boolean => !onlySet || onlySet.includes(name);
+
+  if (shouldRun("calendar")) {
+    const rows = await fetchCalendar();
+    await writeJsonAndCsv("calendar", rows, [
+      "academic_year",
+      "semester",
+      "start_date",
+      "end_date",
+      "event_title",
+      "source_url",
+    ]);
+  }
+
+  if (shouldRun("shuttle")) {
+    const rows = buildShuttleData();
+    console.log(`\n[2/2] 校车时刻表(手动录入): ${rows.length} 条`);
+    await writeJsonAndCsv("shuttle", rows, [
+      "route_name",
+      "direction",
+      "departure",
+      "arrival",
+      "depart_time",
+      "arrive_time",
+      "weekday_only",
+      "period",
+      "note",
+      "source",
+    ]);
+  }
+
+  console.log("\n=== 完成 ===");
+  const files = await fs.readdir(OUTPUT_DIR);
+  for (const f of files) {
+    if (f.startsWith("calendar") || f.startsWith("shuttle")) {
+      const stat = await fs.stat(path.join(OUTPUT_DIR, f));
+      console.log(`  ${f}  (${(stat.size / 1024).toFixed(1)} KB)`);
+    }
+  }
+}
+
+main().catch((err) => {
+  console.error("爬取失败:", err);
+  process.exit(1);
+});
