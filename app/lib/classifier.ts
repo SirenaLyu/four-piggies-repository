@@ -37,12 +37,12 @@ const CATEGORY_DESCRIPTIONS: Record<NonFallback, string> = {
   shuttle:
     "科大校区之间通勤班车时刻表、发车时间、发车点、工作日班次、高新先研院专线",
   notices:
-    "中国科学技术大学教务处通知、教学事务公告、选课、考试、毕业、学籍、报名通知",
+    "中国科学技术大学教务处通知、教学事务公告、选课、考试、毕业、学籍、报名通知、本科生实习管理、助教岗位、教室开放、毕业论文选题、课程安排",
   library:
     "中科大图书馆开放时间、各楼层服务窗口、阅览室、借还书、电话、校区分馆",
   scholarships:
-    "中国科学技术大学奖学金、助学金、奖项评选、公示通知、申请截止日期、联系人邮箱",
-  poi: "科大校园地点、教学楼、食堂、宿舍、办公地点、AED、出入口、报警点、校车点、地址电话",
+    "中国科学技术大学奖学金、助学金、奖项评选、公示通知、申请截止日期、联系人邮箱、助学贷款、勤工助学岗位、资助育人、绿色通道",
+  poi: "科大校园地点、教学楼、食堂、宿舍、办公地点、AED、出入口、报警点、校车点、地址电话、餐厅、楼层位置、在哪个校区、怎么走",
   courses: "中国科学技术大学课程、课程名、课程代码、学时学分、替代课、等效课程",
 };
 
@@ -62,6 +62,9 @@ const SECONDARY_GAP = 0.08;
 // top-1 领先 top-2 不足此值时,认为是弱信号 → 降级 fallback。
 // 防止"合肥明天天气"这类无关问题因为某类目偶发略高而被误判。
 const PRIMARY_MIN_LEAD = 0.03;
+// top-1 分数足够高(强信号)时直接接受,bypass MIN_LEAD。
+// 修复"本科生选课什么时候开始"这种 top1=notices(0.505) 但 top2=shuttle(0.501) gap=0.004 被误降级 fallback 的案例。
+const STRONG_THRESHOLD = 0.50;
 
 // ===== 类目向量缓存(模块加载时并行 embed,fire-and-forget 预加载) =====
 
@@ -139,9 +142,9 @@ export async function classifyWithEmbedding(
 
   let primary: Category = "fallback";
   if (top1 && top1.score >= PRIMARY_THRESHOLD) {
-    // 强信号:top-1 达阈值,且对 top-2 领先足够(或只有 1 个候选)
+    // 强信号(top-1 ≥ 0.50)直接接受;否则要求对 top-2 领先 ≥ MIN_LEAD(或只有 1 个候选)
     const lead = top2 ? top1.score - top2.score : 1;
-    if (lead >= PRIMARY_MIN_LEAD) {
+    if (top1.score >= STRONG_THRESHOLD || lead >= PRIMARY_MIN_LEAD) {
       primary = top1.category;
     }
   }
