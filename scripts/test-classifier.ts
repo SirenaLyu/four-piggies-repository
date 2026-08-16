@@ -69,9 +69,9 @@ async function main() {
     });
     const { primary, secondary, scores } = await classifyWithEmbedding(embedding);
     const topScores = Object.entries(scores)
-      .sort(([, a], [, b]) => b - a)
+      .sort(([, a], [, b]) => (b as number) - (a as number))
       .slice(0, 3)
-      .map(([c, s]) => `${c}=${s.toFixed(3)}`)
+      .map(([c, s]) => `${c}=${(s as number).toFixed(3)}`)
       .join("  ");
     const ok = primary === expected;
     console.log(

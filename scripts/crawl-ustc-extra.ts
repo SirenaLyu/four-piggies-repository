@@ -34,10 +34,14 @@ function toCsvCell(v: unknown): string {
 }
 
 /** 写 JSON + CSV(带 BOM) */
-async function writeJsonAndCsv(name: string, rows: Array<Record<string, unknown>>, cols: string[]): Promise<void> {
+async function writeJsonAndCsv<T>(
+  name: string,
+  rows: Array<T>,
+  cols: Array<keyof T & string>,
+): Promise<void> {
   await fs.writeFile(path.join(OUTPUT_DIR, `${name}.json`), JSON.stringify(rows, null, 2), "utf-8");
   const header = cols.join(",");
-  const body = rows.map((r) => cols.map((c) => toCsvCell(r[c])).join(",")).join("\n");
+  const body = rows.map((r) => cols.map((c) => toCsvCell((r as Record<string, unknown>)[c])).join(",")).join("\n");
   const csv = body ? `${header}\n${body}` : header;
   await fs.writeFile(path.join(OUTPUT_DIR, `${name}.csv`), "﻿" + csv, "utf-8");
 }
@@ -460,7 +464,7 @@ function buildShuttleData(): ShuttleTrip[] {
   }
 
   // 点对点短途线
-  const shortLines: Array<[string, string, string[]]> = [
+  const shortLines: Array<[string, string, string, string[]]> = [
     ["东区→南区", "东区", "南区", ["11:40", "17:10", "19:20"]],
     ["东区→西区", "东区", "西区", ["08:15", "11:30", "14:10", "17:00", "19:00"]],
     ["西区→东区", "西区", "东区", ["08:25", "11:40", "14:20", "17:10", "19:10"]],
