@@ -1,0 +1,1 @@
+{"name": "校历", "description": "中国科学技术大学校历、学期安排、开学放假时间、考试周、节假日", "permission": "all_team_members", "indexing_technique": "high_quality", "provider": "vendor", "embedding_model": "BAAI/bge-m3", "embedding_model_provider": "langgenius/siliconflow/siliconflow"}

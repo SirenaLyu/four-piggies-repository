@@ -1,0 +1,1 @@
+{"name": "奖学金", "description": "中国科学技术大学奖学金、助学金、奖项评选、公示通知、申请截止日期、联系人邮箱", "permission": "all_team_members", "indexing_technique": "high_quality", "provider": "vendor", "embedding_model": "BAAI/bge-m3", "embedding_model_provider": "langgenius/siliconflow/siliconflow"}

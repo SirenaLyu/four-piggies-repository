@@ -40,3 +40,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# dify exploration artifacts
+dify_spec.json
+scripts/dify-retrieve-tmp.json

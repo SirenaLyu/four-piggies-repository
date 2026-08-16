@@ -1,0 +1,1 @@
+{"name": "班车", "description": "科大校区之间通勤班车时刻表、发车时间、发车点、工作日班次、高新先研院专线", "permission": "all_team_members", "indexing_technique": "high_quality", "provider": "vendor", "embedding_model": "BAAI/bge-m3", "embedding_model_provider": "langgenius/siliconflow/siliconflow"}

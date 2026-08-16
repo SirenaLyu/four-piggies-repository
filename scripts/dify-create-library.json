@@ -1,0 +1,1 @@
+{"name": "图书馆", "description": "中科大图书馆开放时间、各楼层服务窗口、阅览室、借还书、电话、校区分馆", "permission": "all_team_members", "indexing_technique": "high_quality", "provider": "vendor", "embedding_model": "BAAI/bge-m3", "embedding_model_provider": "langgenius/siliconflow/siliconflow"}

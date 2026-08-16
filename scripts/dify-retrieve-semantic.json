@@ -1,0 +1,1 @@
+{"query":"PLACEHOLDER","retrieval_model":{"search_method":"semantic_search","reranking_enable":true,"reranking_mode":"reranking_model","reranking_model":{"reranking_provider_name":"langgenius/siliconflow/siliconflow","reranking_model_name":"BAAI/bge-reranker-v2-m3"},"top_k":5,"score_threshold_enabled":false}}

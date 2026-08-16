@@ -1,0 +1,1 @@
+{"name": "教务通知", "description": "中国科学技术大学教务处通知、教学事务公告、选课、考试、毕业、学籍、报名通知", "permission": "all_team_members", "indexing_technique": "high_quality", "provider": "vendor", "embedding_model": "BAAI/bge-m3", "embedding_model_provider": "langgenius/siliconflow/siliconflow"}

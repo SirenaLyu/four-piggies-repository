@@ -1,0 +1,1 @@
+{"query":"PLACEHOLDER","retrieval_model":{"search_method":"semantic_search","reranking_enable":false,"top_k":5,"score_threshold_enabled":false}}
