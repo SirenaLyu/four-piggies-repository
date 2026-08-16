@@ -1,6 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
 import { convertToModelMessages, createTextStreamResponse, embed, streamText } from "ai";
 import { chatClient, embeddingClient, EMBEDDING_MODEL, CHAT_MODEL } from "../../lib/ai-clients";
+import {
+  classifyWithEmbedding,
+  isCourseSubstituteQuery,
+  extractCourseName,
+  type Category,
+} from "../../lib/classifier";
+import { PROMPT_TEMPLATES } from "../../lib/prompts";
 
 // ===== Supabase 客户端 =====
 const supabase = createClient(
@@ -24,35 +31,155 @@ function extractMessageText(m: Record<string, unknown>): string {
   return "";
 }
 
-/**
- * 简单意图检测：判断问题是否与"课程替代"相关。
- * 命中关键词时，会额外查询 campus_substitute_pool。
- */
-function isCourseSubstituteQuery(q: string): boolean {
-  return /替代|代替|替换|换课|等效课程|学分互认|能不能代替|可以替代|能替代|可替代/.test(q);
-}
+// ===== 各类检索:7 类功能各对应一路 RPC =====
 
-// ===== 三类来源的向量检索 =====
-
-/** 1. 通用校园文档(原有 campus_documents) */
-async function searchDocuments(embedding: number[]): Promise<string> {
-  const { data, error } = await supabase.rpc("match_documents", {
+/** 1. 校历(campus_calendar) */
+async function searchCalendar(embedding: number[]): Promise<string> {
+  const { data, error } = await supabase.rpc("match_calendar", {
     query_embedding: embedding,
-    match_threshold: 0.5,
-    match_count: 5,
+    match_threshold: 0.4,
+    match_count: 8,
   });
-
   if (error || !data || data.length === 0) return "";
-
-  return data
-    .map(
-      (doc: { title: string; content: string }) =>
-        `【校园资料】${doc.title ?? ""}\n${doc.content}`,
-    )
+  return (data as Array<{
+    academic_year: string | null;
+    semester: string | null;
+    start_date: string | null;
+    end_date: string | null;
+    event_title: string;
+    source_url: string | null;
+  }>)
+    .map((e) => {
+      const lines = [`【校历】${e.event_title}`];
+      if (e.academic_year || e.semester)
+        lines.push(`${e.academic_year ?? ""}${e.semester ? ` ${e.semester}学期` : ""}`.trim());
+      if (e.start_date)
+        lines.push(`日期:${e.start_date}${e.end_date && e.end_date !== e.start_date ? ` ~ ${e.end_date}` : ""}`);
+      if (e.source_url) lines.push(`来源:${e.source_url}`);
+      return lines.join(" ");
+    })
     .join("\n\n---\n\n");
 }
 
-/** 2. POI(校园建筑/食堂/宿舍/AED 等) */
+/** 2. 班车(campus_shuttle) */
+async function searchShuttle(embedding: number[]): Promise<string> {
+  const { data, error } = await supabase.rpc("match_shuttle", {
+    query_embedding: embedding,
+    match_threshold: 0.4,
+    match_count: 10,
+  });
+  if (error || !data || data.length === 0) return "";
+  return (data as Array<{
+    route_name: string;
+    direction: string | null;
+    departure: string | null;
+    arrival: string | null;
+    depart_time: string | null;
+    arrive_time: string | null;
+    weekday_only: string | null;
+    period: string | null;
+    note: string | null;
+  }>)
+    .map((s) => {
+      const lines = [`【班车】${s.route_name}`];
+      if (s.direction) lines.push(s.direction);
+      if (s.departure && s.arrival) lines.push(`${s.departure}→${s.arrival}`);
+      if (s.depart_time)
+        lines.push(`${s.depart_time}发车${s.arrive_time ? ` ${s.arrive_time}到` : ""}`);
+      if (s.weekday_only) lines.push(s.weekday_only === "true" ? "工作日" : "每日");
+      if (s.period) lines.push(`时段:${s.period}`);
+      if (s.note) lines.push(`备注:${s.note}`);
+      return lines.join(" ");
+    })
+    .join("\n\n---\n\n");
+}
+
+/** 3. 教务通知(campus_notices) */
+async function searchNotices(embedding: number[]): Promise<string> {
+  const { data, error } = await supabase.rpc("match_notices", {
+    query_embedding: embedding,
+    match_threshold: 0.4,
+    match_count: 5,
+  });
+  if (error || !data || data.length === 0) return "";
+  return (data as Array<{
+    title: string;
+    url: string | null;
+    publish_date: string | null;
+    author: string | null;
+    category: string | null;
+    body_preview: string | null;
+  }>)
+    .map((n) => {
+      const lines = [`【通知】${n.title}`];
+      if (n.publish_date) lines.push(`发布:${n.publish_date}`);
+      if (n.author) lines.push(`发布者:${n.author}`);
+      if (n.category) lines.push(`类别:${n.category}`);
+      if (n.body_preview) lines.push(`摘要:${n.body_preview}`);
+      if (n.url) lines.push(`链接:${n.url}`);
+      return lines.join(" ");
+    })
+    .join("\n\n---\n\n");
+}
+
+/** 4. 图书馆(campus_library_hours) */
+async function searchLibraryHours(embedding: number[]): Promise<string> {
+  const { data, error } = await supabase.rpc("match_library_hours", {
+    query_embedding: embedding,
+    match_threshold: 0.4,
+    match_count: 8,
+  });
+  if (error || !data || data.length === 0) return "";
+  return (data as Array<{
+    branch: string;
+    floor: string | null;
+    service: string | null;
+    weekday_hours: string | null;
+    weekend_hours: string | null;
+    phone: string | null;
+    source_url: string | null;
+  }>)
+    .map((l) => {
+      const lines = [`【图书馆】${l.branch}`];
+      if (l.floor) lines.push(`楼层:${l.floor}`);
+      if (l.service) lines.push(`服务:${l.service}`);
+      if (l.weekday_hours) lines.push(`工作日:${l.weekday_hours}`);
+      if (l.weekend_hours) lines.push(`周末:${l.weekend_hours}`);
+      if (l.phone) lines.push(`电话:${l.phone}`);
+      return lines.join(" ");
+    })
+    .join("\n\n---\n\n");
+}
+
+/** 5. 奖学金(campus_scholarships) */
+async function searchScholarships(embedding: number[]): Promise<string> {
+  const { data, error } = await supabase.rpc("match_scholarships", {
+    query_embedding: embedding,
+    match_threshold: 0.4,
+    match_count: 5,
+  });
+  if (error || !data || data.length === 0) return "";
+  return (data as Array<{
+    title: string;
+    url: string | null;
+    publish_date: string | null;
+    publisher: string | null;
+    category: string | null;
+    body_preview: string | null;
+  }>)
+    .map((s) => {
+      const lines = [`【奖学金】${s.title}`];
+      if (s.publish_date) lines.push(`发布:${s.publish_date}`);
+      if (s.publisher) lines.push(`发布者:${s.publisher}`);
+      if (s.category) lines.push(`类别:${s.category}`);
+      if (s.body_preview) lines.push(`摘要:${s.body_preview}`);
+      if (s.url) lines.push(`链接:${s.url}`);
+      return lines.join(" ");
+    })
+    .join("\n\n---\n\n");
+}
+
+/** 6. POI(校园建筑/食堂/宿舍/AED 等) */
 async function searchPois(embedding: number[]): Promise<string> {
   const { data, error } = await supabase.rpc("match_pois", {
     query_embedding: embedding,
@@ -61,32 +188,30 @@ async function searchPois(embedding: number[]): Promise<string> {
   });
   if (error || !data || data.length === 0) return "";
 
-  return data
-    .map(
-      (p: {
-        title: string;
-        address: string | null;
-        category: string | null;
-        xiaoqu: string | null;
-        description: string | null;
-        telephone: string | null;
-        url: string | null;
-      }) => {
-        const lines = [`【校园地点】${p.title}`];
-        if (p.category) lines.push(`分类:${p.category}`);
-        if (p.xiaoqu) lines.push(`校区:${p.xiaoqu}`);
-        if (p.address) lines.push(`地址:${p.address}`);
-        if (p.telephone) lines.push(`电话:${p.telephone}`);
-        if (p.description && p.description !== "暂无介绍！")
-          lines.push(`简介:${p.description}`);
-        if (p.url) lines.push(`链接:${p.url}`);
-        return lines.join(" ");
-      },
-    )
+  return (data as Array<{
+    title: string;
+    address: string | null;
+    category: string | null;
+    xiaoqu: string | null;
+    description: string | null;
+    telephone: string | null;
+    url: string | null;
+  }>)
+    .map((p) => {
+      const lines = [`【校园地点】${p.title}`];
+      if (p.category) lines.push(`分类:${p.category}`);
+      if (p.xiaoqu) lines.push(`校区:${p.xiaoqu}`);
+      if (p.address) lines.push(`地址:${p.address}`);
+      if (p.telephone) lines.push(`电话:${p.telephone}`);
+      if (p.description && p.description !== "暂无介绍！")
+        lines.push(`简介:${p.description}`);
+      if (p.url) lines.push(`链接:${p.url}`);
+      return lines.join(" ");
+    })
     .join("\n\n---\n\n");
 }
 
-/** 3. 课程信息 */
+/** 7. 课程信息(campus_courses) */
 async function searchCourses(embedding: number[]): Promise<string> {
   const { data, error } = await supabase.rpc("match_courses", {
     query_embedding: embedding,
@@ -95,29 +220,27 @@ async function searchCourses(embedding: number[]): Promise<string> {
   });
   if (error || !data || data.length === 0) return "";
 
-  return data
-    .map(
-      (c: {
-        cn: string;
-        en: string | null;
-        code: string | null;
-        period: number | null;
-        credits: number | null;
-        role: string | null;
-      }) => {
-        const lines = [`【课程】${c.cn}`];
-        if (c.en) lines.push(`(${c.en})`);
-        if (c.code) lines.push(`代码:${c.code}`);
-        if (c.period) lines.push(`学时:${c.period}`);
-        if (c.credits != null) lines.push(`学分:${c.credits}`);
-        if (c.role) lines.push(`角色:${c.role}`);
-        return lines.join(" ");
-      },
-    )
+  return (data as Array<{
+    cn: string;
+    en: string | null;
+    code: string | null;
+    period: number | null;
+    credits: number | null;
+    role: string | null;
+  }>)
+    .map((c) => {
+      const lines = [`【课程】${c.cn}`];
+      if (c.en) lines.push(`(${c.en})`);
+      if (c.code) lines.push(`代码:${c.code}`);
+      if (c.period) lines.push(`学时:${c.period}`);
+      if (c.credits != null) lines.push(`学分:${c.credits}`);
+      if (c.role) lines.push(`角色:${c.role}`);
+      return lines.join(" ");
+    })
     .join("\n\n---\n\n");
 }
 
-/** 4. 课程替代关系(只在用户明确询问时调用,基于课程文本模糊匹配) */
+/** 8. 课程替代关系(文本模糊匹配,需课程名而非 embedding) */
 async function searchSubstitutes(courseText: string): Promise<string> {
   if (!courseText) return "";
   const { data, error } = await supabase.rpc("find_substitute_courses", {
@@ -125,7 +248,6 @@ async function searchSubstitutes(courseText: string): Promise<string> {
   });
   if (error || !data || data.length === 0) return "";
 
-  // 按查询课程聚合
   const byQuery = new Map<string, string[]>();
   for (const r of data as Array<{
     query_course_cn: string;
@@ -151,49 +273,75 @@ async function searchSubstitutes(courseText: string): Promise<string> {
     .join("\n\n---\n\n");
 }
 
+/** 9. 通用校园文档(campus_documents,仅 fallback 用) */
+async function searchDocuments(embedding: number[]): Promise<string> {
+  const { data, error } = await supabase.rpc("match_documents", {
+    query_embedding: embedding,
+    match_threshold: 0.5,
+    match_count: 5,
+  });
+  if (error || !data || data.length === 0) return "";
+  return (data as Array<{ title: string; content: string }>)
+    .map((doc) => `【校园资料】${doc.title ?? ""}\n${doc.content}`)
+    .join("\n\n---\n\n");
+}
+
 /**
- * 综合检索：并行查 POI / 课程 / 通用文档，按意图可能附加课程替代查询。
+ * 按类目分发到对应 RPC。courses 类目内若命中课程替代关键词,附加替代查询。
  */
-async function searchRelevantDocuments(userQuery: string): Promise<string> {
-  // 1. 一次 embedding,三处复用
+async function searchOne(
+  category: Category,
+  embedding: number[],
+  query: string,
+): Promise<string> {
+  switch (category) {
+    case "calendar":
+      return searchCalendar(embedding);
+    case "shuttle":
+      return searchShuttle(embedding);
+    case "notices":
+      return searchNotices(embedding);
+    case "library":
+      return searchLibraryHours(embedding);
+    case "scholarships":
+      return searchScholarships(embedding);
+    case "poi":
+      return searchPois(embedding);
+    case "courses": {
+      const courseText = await searchCourses(embedding);
+      if (isCourseSubstituteQuery(query)) {
+        const subText = await searchSubstitutes(extractCourseName(query));
+        return [courseText, subText].filter(Boolean).join("\n\n===\n\n");
+      }
+      return courseText;
+    }
+    case "fallback":
+      return searchDocuments(embedding);
+  }
+}
+
+/**
+ * 分类路由:embed 一次 → 分类 → 按类调 1-2 路 RPC → 拼接上下文。
+ */
+async function searchRouted(userQuery: string): Promise<{
+  context: string;
+  primary: Category;
+}> {
   const { embedding } = await embed({
     model: embeddingClient.embedding(EMBEDDING_MODEL),
     value: userQuery,
   });
 
-  // 2. 并行查三张表
-  const [docText, poiText, courseText] = await Promise.all([
-    searchDocuments(embedding),
-    searchPois(embedding),
-    searchCourses(embedding),
-  ]);
+  const { primary, secondary } = await classifyWithEmbedding(embedding);
+  const cats: Category[] = [primary, secondary].filter(
+    (c): c is Category => c !== null && c !== "fallback",
+  );
+  // fallback 时仍查通用文档
+  if (cats.length === 0) cats.push("fallback");
 
-  // 3. 意图命中时再查替代池 — 从 userQuery 抠出课程名
-  //    匹配两种语序:
-  //      "X 能替代 什么课"   → 课程名 X 在关键词前
-  //      "X 替代 Y"          → 课程名 X 在关键词前
-  //      "能替代 X 吗"       → 课程名 X 在关键词后
-  //    去掉疑问词/助词后取剩余 token,再 fallback 用整句
-  let substituteText = "";
-  if (isCourseSubstituteQuery(userQuery)) {
-    const cleaned = userQuery
-      .replace(/[???！!。.,，、]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    // 先尝试:课程名在关键词前
-    const beforeMatch = cleaned.match(/^(.+?)\s*(?:能|可以|可)?(?:替代|代替|替换|换课|等效)/);
-    // 再尝试:课程名在关键词后
-    const afterMatch = cleaned.match(/(?:替代|代替|替换|换课|等效)(?:什么|哪些|啥|成|为|做)?\s*(.+)$/);
-    const courseName =
-      (beforeMatch?.[1] && beforeMatch[1].length >= 2 ? beforeMatch[1] : "") ||
-      (afterMatch?.[1] && afterMatch[1].length >= 2 ? afterMatch[1] : "") ||
-      cleaned;
-    substituteText = await searchSubstitutes(courseName);
-  }
-
-  return [docText, poiText, courseText, substituteText]
-    .filter(Boolean)
-    .join("\n\n===\n\n");
+  const parts = await Promise.all(cats.map((c) => searchOne(c, embedding, userQuery)));
+  const context = parts.filter(Boolean).join("\n\n===\n\n");
+  return { context, primary };
 }
 
 // ===== API 路由 =====
@@ -211,23 +359,13 @@ export async function POST(req: Request) {
     ? extractMessageText(lastUserMessage as Record<string, unknown>)
     : "";
 
-  // 用 embeddingClient 转向量 → Supabase 向量搜索 → 拼接结果
-  const context = userQuery
-    ? await searchRelevantDocuments(userQuery)
-    : "";
+  // 分类路由 → 1-2 路 RPC → 上下文 + 主类目
+  const { context, primary } = userQuery
+    ? await searchRouted(userQuery)
+    : { context: "", primary: "fallback" as Category };
 
-  // 拼接系统提示
-  const systemPrompt = `你是中国科学技术大学智能校园助手，名字叫"科大精灵"，专门回答关于学校的问题。
-
-你可以参考以下三类检索结果:
-- 【校园资料】人工整理的校园政策、流程等文本
-- 【校园地点】食堂/宿舍/教学楼/AED/出入口等校园 POI(地址、电话、简介)
-- 【课程】课程名、代码、学时、学分
-- 【课程替代】替代课与原课的对应关系
-
-请基于上述资料回答。若资料不足或不确定,请如实说明。涉及具体地点/电话/课程代码时,优先采用检索结果,不要臆造。
-
-${context || "（未找到相关学校资料，请根据你的知识回答）"}`;
+  // 按主类目选专用 prompt 模板
+  const systemPrompt = PROMPT_TEMPLATES[primary]({ context, query: userQuery });
 
   // 用 chatClient 流式生成回答
   const result = await streamText({
