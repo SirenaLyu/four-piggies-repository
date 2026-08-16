@@ -571,7 +571,37 @@ async function searchPois(embedding: number[]): Promise<SupabaseHit[]> {
   }));
 }
 
-async function searchCourses(embedding: number[]): Promise<SupabaseHit[]> {
+async function searchCourses(embedding: number[], query: string): Promise<SupabaseHit[]> {
+  // query 中抠出可能的课程代码(6 位以上数字串),走文本 ilike 反查
+  const codeMatch = query.match(/\b(\d{5,8})\b/);
+  if (codeMatch) {
+    const code = codeMatch[1];
+    const { data: codeData, error: codeErr } = await supabase
+      .from("campus_courses")
+      .select("cn, en, code, period, credits, role")
+      .ilike("code", `%${code}%`)
+      .limit(5);
+    if (!codeErr && codeData && codeData.length > 0) {
+      return (codeData as Array<{
+        cn: string;
+        en: string | null;
+        code: string | null;
+        period: number | null;
+        credits: number | null;
+        role: string | null;
+      }>).map((c) => ({
+        text: [
+          c.cn,
+          c.en,
+          c.code ? `代码:${c.code}` : "",
+          c.period ? `学时:${c.period}` : "",
+          c.credits != null ? `学分:${c.credits}` : "",
+          c.role ? `角色:${c.role}` : "",
+        ].filter(Boolean).join(" "),
+        similarity: 1.0,
+      }));
+    }
+  }
   const { data, error } = await supabase.rpc("match_courses", {
     query_embedding: embedding,
     match_threshold: 0.4,
@@ -685,7 +715,7 @@ async function supabaseSearch(
     case "poi":
       return searchPois(embedding);
     case "courses": {
-      const courseHits = await searchCourses(embedding);
+      const courseHits = await searchCourses(embedding, query);
       if (isCourseSubstituteQuery(query)) {
         const subHits = await searchSubstitutes(extractCourseName(query));
         return [...subHits, ...courseHits];

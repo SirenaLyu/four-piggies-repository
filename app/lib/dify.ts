@@ -93,3 +93,19 @@ export async function searchDify(
     return "";
   }
 }
+
+/**
+ * 并行查 Dify 5 个主题库,合并每个库的 top-2 结果(共最多 10 条)。
+ * 用于 fallback 类目 —— 因为分类器没路由到具体类目,只能跨库撒网。
+ * 失败库返回空,其他库照常返回。
+ */
+export async function searchDifyAll(query: string, topKPerDataset = 2): Promise<string> {
+  const categories = Object.keys(DATASET_IDS) as Array<keyof typeof DATASET_IDS>;
+  const results = await Promise.all(
+    categories.map(async (c) => {
+      const text = await searchDify(c, query, topKPerDataset);
+      return text ? `【${c}】\n${text}` : "";
+    }),
+  );
+  return results.filter(Boolean).join("\n\n===\n\n");
+}

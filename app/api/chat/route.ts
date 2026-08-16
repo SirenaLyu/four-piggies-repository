@@ -7,8 +7,8 @@ import {
   extractCourseName,
   type Category,
 } from "../../lib/classifier";
-import { PROMPT_TEMPLATES, DIFY_PROMPT_TEMPLATES } from "../../lib/prompts";
-import { searchDify, difySupports } from "../../lib/dify";
+import { PROMPT_TEMPLATES, DIFY_PROMPT_TEMPLATES, difyFallbackPrompt } from "../../lib/prompts";
+import { searchDify, searchDifyAll, difySupports } from "../../lib/dify";
 
 // ===== Supabase 客户端 =====
 const supabase = createClient(
@@ -212,23 +212,41 @@ async function searchPois(embedding: number[]): Promise<string> {
     .join("\n\n---\n\n");
 }
 
-/** 7. 课程信息(campus_courses) */
-async function searchCourses(embedding: number[]): Promise<string> {
-  const { data, error } = await supabase.rpc("match_courses", {
-    query_embedding: embedding,
-    match_threshold: 0.4,
-    match_count: 5,
-  });
-  if (error || !data || data.length === 0) return "";
-
-  return (data as Array<{
+/** 7. 课程信息(campus_courses)。query 含数字代码时优先 ilike 反查,否则走 embedding 相似。 */
+async function searchCourses(embedding: number[], query: string): Promise<string> {
+  // query 中抠出可能的课程代码(6 位以上数字串),走文本 ilike 反查
+  const codeMatch = query.match(/\b(\d{5,8})\b/);
+  let rows: Array<{
     cn: string;
     en: string | null;
     code: string | null;
     period: number | null;
     credits: number | null;
     role: string | null;
-  }>)
+  }> = [];
+
+  if (codeMatch) {
+    const code = codeMatch[1];
+    const { data, error } = await supabase
+      .from("campus_courses")
+      .select("cn, en, code, period, credits, role")
+      .ilike("code", `%${code}%`)
+      .limit(5);
+    if (!error && data && data.length > 0) rows = data as typeof rows;
+  }
+
+  // ilike 无命中或没抠到代码 → 走 embedding 相似
+  if (rows.length === 0) {
+    const { data, error } = await supabase.rpc("match_courses", {
+      query_embedding: embedding,
+      match_threshold: 0.4,
+      match_count: 5,
+    });
+    if (error || !data || data.length === 0) return "";
+    rows = data as typeof rows;
+  }
+
+  return rows
     .map((c) => {
       const lines = [`【课程】${c.cn}`];
       if (c.en) lines.push(`(${c.en})`);
@@ -309,7 +327,7 @@ async function searchOne(
     case "poi":
       return searchPois(embedding);
     case "courses": {
-      const courseText = await searchCourses(embedding);
+      const courseText = await searchCourses(embedding, query);
       if (isCourseSubstituteQuery(query)) {
         const subText = await searchSubstitutes(extractCourseName(query));
         return [courseText, subText].filter(Boolean).join("\n\n===\n\n");
@@ -348,9 +366,18 @@ async function searchRouted(userQuery: string): Promise<{
   const parts = await Promise.all(cats.map((c) => searchOne(c, embedding, userQuery)));
   let context = parts.filter(Boolean).join("\n\n===\n\n");
 
-  // Supabase 无命中 + primary 在 Dify 支持类目内 → Dify 兜底
+  // Supabase 无命中 + primary 在 Dify 支持类目内 → Dify 单库兜底
   if (!context && difySupports(primary)) {
     const difyContext = await searchDify(primary, userQuery);
+    if (difyContext) {
+      context = difyContext;
+      return { context, primary, usedDify: true };
+    }
+  }
+
+  // primary=fallback 时(分类器没路由到具体类目)→ 跨 Dify 5 库撒网兜底
+  if (!context && primary === "fallback") {
+    const difyContext = await searchDifyAll(userQuery);
     if (difyContext) {
       context = difyContext;
       return { context, primary, usedDify: true };
@@ -380,9 +407,17 @@ export async function POST(req: Request) {
     ? await searchRouted(userQuery)
     : { context: "", primary: "fallback" as Category, usedDify: false };
 
-  // 按主类目选专用 prompt 模板;Dify 兜底命中时用 DIFY_PROMPT_TEMPLATES
-  const template = usedDify && difySupports(primary) ? DIFY_PROMPT_TEMPLATES[primary] : PROMPT_TEMPLATES[primary];
-  const systemPrompt = template({ context, query: userQuery });
+  // 按主类目选专用 prompt 模板;Dify 兜底命中时:
+  // - primary 在 5 类内 → DIFY_PROMPT_TEMPLATES[primary]
+  // - primary=fallback(跨库撒网)→ difyFallbackPrompt
+  let systemPrompt: string;
+  if (usedDify && difySupports(primary)) {
+    systemPrompt = DIFY_PROMPT_TEMPLATES[primary]({ context, query: userQuery });
+  } else if (usedDify && primary === "fallback") {
+    systemPrompt = difyFallbackPrompt({ context, query: userQuery });
+  } else {
+    systemPrompt = PROMPT_TEMPLATES[primary]({ context, query: userQuery });
+  }
 
   // 用 chatClient 流式生成回答
   const result = await streamText({

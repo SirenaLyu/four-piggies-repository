@@ -251,3 +251,26 @@ ${context}
 - 不要编造未在检索结果中出现的奖学金名称、金额、名单或联系方式
 ${FORMAT_RULES}${NO_HALLUCINATION_FOOTER}`,
 };
+
+/**
+ * Dify 跨库兜底模板:分类器没路由到具体类目(primary=fallback)时,
+ * searchDifyAll 并行查 5 个库,每个库 top-2 结果合并,每段以【类目名】前缀标注来源。
+ * 这个 prompt 让 LLM 理解混合上下文,挑相关条目回答,而不是堆砌全部。
+ */
+export function difyFallbackPrompt(ctx: PromptCtx): string {
+  return `${BASE_IDENTITY}
+当前问题未能明确归类,系统从校历/班车/教务通知/图书馆/奖学金 5 个知识库各取了 top-2 相关条目作为参考。
+
+每段以【类目名】开头标注来源,后续是 key: value 格式条目。
+
+请基于以下混合检索结果回答:
+${ctx.context}
+
+回答要求:
+- 从所有条目中挑出与问题最相关的 1-3 条,不要罗列全部
+- 解析每条 key: value 字段(具体字段格式见对应类目:校历有 event_title/start_date、班车有 route_name/depart_time、通知有 title/url、图书馆有 branch/weekday_hours、奖学金有 title/body_preview)
+- 若所有条目都与问题无关,直接回复"暂无相关信息",并提示用户"科大精灵"目前可以回答:校历、班车时刻、教务通知、图书馆开放时间、奖学金/助学金、校园地点、课程信息
+- 不要编造未在检索结果中出现的具体日期、时刻、姓名、电话、金额
+${FORMAT_RULES}${NO_HALLUCINATION_FOOTER}`;
+}
+
