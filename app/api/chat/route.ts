@@ -7,7 +7,8 @@ import {
   extractCourseName,
   type Category,
 } from "../../lib/classifier";
-import { PROMPT_TEMPLATES } from "../../lib/prompts";
+import { PROMPT_TEMPLATES, DIFY_PROMPT_TEMPLATES } from "../../lib/prompts";
+import { searchDify, difySupports } from "../../lib/dify";
 
 // ===== Supabase 客户端 =====
 const supabase = createClient(
@@ -322,10 +323,15 @@ async function searchOne(
 
 /**
  * 分类路由:embed 一次 → 分类 → 按类调 1-2 路 RPC → 拼接上下文。
+ *
+ * Fallback 策略:若 Supabase 检索为空且 primary 类目在 Dify 支持的 5 类内
+ * (calendar/shuttle/notices/library/scholarships),改用 Dify retrieve API
+ * 兜底检索,并标记 usedDify=true 让上层用 DIFY_PROMPT_TEMPLATES。
  */
 async function searchRouted(userQuery: string): Promise<{
   context: string;
   primary: Category;
+  usedDify: boolean;
 }> {
   const { embedding } = await embed({
     model: embeddingClient.embedding(EMBEDDING_MODEL),
@@ -340,8 +346,18 @@ async function searchRouted(userQuery: string): Promise<{
   if (cats.length === 0) cats.push("fallback");
 
   const parts = await Promise.all(cats.map((c) => searchOne(c, embedding, userQuery)));
-  const context = parts.filter(Boolean).join("\n\n===\n\n");
-  return { context, primary };
+  let context = parts.filter(Boolean).join("\n\n===\n\n");
+
+  // Supabase 无命中 + primary 在 Dify 支持类目内 → Dify 兜底
+  if (!context && difySupports(primary)) {
+    const difyContext = await searchDify(primary, userQuery);
+    if (difyContext) {
+      context = difyContext;
+      return { context, primary, usedDify: true };
+    }
+  }
+
+  return { context, primary, usedDify: false };
 }
 
 // ===== API 路由 =====
@@ -359,13 +375,14 @@ export async function POST(req: Request) {
     ? extractMessageText(lastUserMessage as Record<string, unknown>)
     : "";
 
-  // 分类路由 → 1-2 路 RPC → 上下文 + 主类目
-  const { context, primary } = userQuery
+  // 分类路由 → 1-2 路 RPC → 上下文 + 主类目(+ Dify fallback 标记)
+  const { context, primary, usedDify } = userQuery
     ? await searchRouted(userQuery)
-    : { context: "", primary: "fallback" as Category };
+    : { context: "", primary: "fallback" as Category, usedDify: false };
 
-  // 按主类目选专用 prompt 模板
-  const systemPrompt = PROMPT_TEMPLATES[primary]({ context, query: userQuery });
+  // 按主类目选专用 prompt 模板;Dify 兜底命中时用 DIFY_PROMPT_TEMPLATES
+  const template = usedDify && difySupports(primary) ? DIFY_PROMPT_TEMPLATES[primary] : PROMPT_TEMPLATES[primary];
+  const systemPrompt = template({ context, query: userQuery });
 
   // 用 chatClient 流式生成回答
   const result = await streamText({
