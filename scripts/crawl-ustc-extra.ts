@@ -535,7 +535,7 @@ function parseScholarshipListHtml(html: string): Array<{ title: string; url: str
   return items;
 }
 
-/** 从详情页提取 publisher 与 body_preview(剥标签 + 截 200 字) */
+/** 从详情页提取 publisher 与 body_preview(剥标签 + 截 800 字,覆盖公示期/联系人/邮箱/电话) */
 function parseScholarshipDetailHtml(html: string): { publisher: string; body_preview: string } {
   const publisher = html.match(/<span class="arti_publisher">发布者：([^<]+)<\/span>/)?.[1]?.trim() ?? "";
   const bodyMatch = html.match(/<div class='wp_articlecontent'>([\s\S]*?)<\/div>/);
@@ -550,7 +550,7 @@ function parseScholarshipDetailHtml(html: string): { publisher: string; body_pre
       .replace(/>/g, ">")
       .replace(/\s+/g, " ")
       .trim()
-      .slice(0, 200);
+      .slice(0, 800);
   }
   return { publisher, body_preview };
 }
