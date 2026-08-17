@@ -1,26 +1,74 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ── 字体 ─────────────────────────────────────────── */
+@theme inline {
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-muted: var(--muted);
+  --color-foreground: var(--foreground);
+  --color-border: var(--border);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* ── 品牌色板（蓝白 · 科大蓝） ─────────────────────── */
+@theme {
+  /* 品牌主色 */
+  --color-primary-600: #0046ad;
+  --color-primary-500: #0a5bd4;
+  --color-primary-400: #3b82f6;
+  --color-primary-100: #dbeafe;
+  --color-primary-50:  #eff6ff;
+
+  /* 中性色（蓝调灰） */
+  --color-ink-900: #16233a;
+  --color-ink-600: #55657a;
+  --color-ink-400: #8a98ab;
+  --color-ink-200: #e3eaf3;
+  --color-ink-100: #f0f4f9;
+
+  /* 语义色 */
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger:  #ef4444;
+}
+
+/* ── 语义色（随明暗主题切换） ─────────────────────── */
+:root {
+  --background: #eff6ff;
+  --surface: #ffffff;
+  --muted: #f0f4f9;
+  --foreground: #16233a;
+  --border: #e3eaf3;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0b1220;
+    --surface: #111a2c;
+    --muted: #1a2537;
+    --foreground: #e6edf7;
+    --border: #1f2b42;
   }
 }
 
+/* ── 基础样式 ─────────────────────────────────────── */
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* ── Logo 动效 ────────────────────────────────────── */
+@keyframes orbit-spin { to { transform: rotate(360deg); } }
+@keyframes page-flip-l { 0%,100% { transform: rotate(0deg); } 45%,55% { transform: rotate(-8deg); } }
+@keyframes page-flip-r { 0%,100% { transform: rotate(0deg); } 45%,55% { transform: rotate(8deg); } }
+@keyframes logo-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+@keyframes logo-wave { 0%,100% { transform: translateY(0); } 50% { transform: translateY(3px); } }
+
+.orbit-spin  { transform-box: fill-box; transform-origin: center; animation: orbit-spin 9s linear infinite; }
+.page-flip-l { transform-box: fill-box; transform-origin: 100% 50%; animation: page-flip-l 3.2s ease-in-out infinite; }
+.page-flip-r { transform-box: fill-box; transform-origin: 0% 50%;   animation: page-flip-r 3.2s ease-in-out infinite; }
+.logo-float  { animation: logo-float 2.6s ease-in-out infinite; }
+.logo-wave   { animation: logo-wave 3.4s ease-in-out infinite; }

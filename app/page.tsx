@@ -8,6 +8,8 @@ import {
   type ExportFileDescriptor,
 } from "./lib/export";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
+import { Logo } from "./components/Logo";
+import { IntroAnimation } from "./components/IntroAnimation";
 
 // ===== 本地会话持久化 =====
 
@@ -125,6 +127,8 @@ function formatTime(ts: number) {
 
 export default function Home() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [showIntro, setShowIntro] = useState(true);
+  const handleIntroFinish = useCallback(() => setShowIntro(false), []);
   const [activeId, setActiveId] = useState<string>(() => generateChatId());
   const [hydrated, setHydrated] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<FileUIPart[]>([]);
@@ -412,28 +416,32 @@ export default function Home() {
 
   // ===== 渲染 =====
 
+  if (showIntro) {
+    return <IntroAnimation onFinish={handleIntroFinish} />;
+  }
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-blue-50 text-gray-900">
+    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       {/* 左侧历史会话栏 */}
       <aside
         className={`${
           sidebarOpen ? "w-72" : "w-0"
-        } shrink-0 transition-all duration-200 overflow-hidden bg-white border-r border-gray-200 flex flex-col`}
+        } shrink-0 transition-all duration-200 overflow-hidden bg-surface border-r border-border flex flex-col`}
       >
         <div className="w-72 h-full flex flex-col">
-          <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-700">历史会话</h2>
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-foreground/80">历史会话</h2>
             <button
               type="button"
               onClick={startNewConversation}
-              className="text-xs px-2 py-1 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors"
+              className="text-xs px-2 py-1 rounded-md bg-primary-50 text-primary-600 hover:bg-primary-100 transition-colors"
             >
               + 新对话
             </button>
           </div>
           <div className="flex-1 overflow-y-auto">
             {conversations.length === 0 && (
-              <div className="px-4 py-6 text-center text-xs text-gray-400">
+              <div className="px-4 py-6 text-center text-xs text-foreground/40">
                 还没有会话记录
               </div>
             )}
@@ -452,14 +460,14 @@ export default function Home() {
               return (
                 <div
                   key={c.id}
-                  className={`group border-b border-gray-100 transition-colors ${
-                    isActive ? "bg-blue-50" : "hover:bg-gray-50"
+                  className={`group border-b border-border transition-colors ${
+                    isActive ? "bg-primary-50" : "hover:bg-muted"
                   }`}
                 >
                   <div
                     onClick={() => selectConversation(c.id)}
                     className={`px-3 py-3 cursor-pointer flex items-start gap-2 ${
-                      isActive ? "text-blue-700" : "text-gray-700"
+                      isActive ? "text-primary-600" : "text-foreground/80"
                     }`}
                   >
                     <button
@@ -468,7 +476,7 @@ export default function Home() {
                         e.stopPropagation();
                         toggleConvoExpanded(c.id);
                       }}
-                      className={`mt-0.5 w-4 h-4 flex items-center justify-center text-xs text-gray-500 hover:text-gray-800 transition-transform ${
+                      className={`mt-0.5 w-4 h-4 flex items-center justify-center text-xs text-foreground/60 hover:text-foreground transition-transform ${
                         isExpanded ? "rotate-90" : ""
                       }`}
                       aria-label={isExpanded ? "收起" : "展开"}
@@ -477,7 +485,7 @@ export default function Home() {
                     </button>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">{c.title}</div>
-                      <div className="text-[11px] text-gray-400 mt-0.5">
+                      <div className="text-[11px] text-foreground/40 mt-0.5">
                         {formatTime(c.updatedAt)} · {userNodes.length} 个问题
                       </div>
                     </div>
@@ -487,7 +495,7 @@ export default function Home() {
                         e.stopPropagation();
                         removeConversation(c.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 text-xs px-1"
+                      className="opacity-0 group-hover:opacity-100 text-foreground/40 hover:text-danger text-xs px-1"
                       aria-label="删除会话"
                     >
                       ×
@@ -496,11 +504,11 @@ export default function Home() {
                   {isExpanded && (
                     <div className="pb-2 pl-9 pr-3">
                       {userNodes.length === 0 ? (
-                        <div className="text-[11px] text-gray-400 py-1">
+                        <div className="text-[11px] text-foreground/40 py-1">
                           暂无问题
                         </div>
                       ) : (
-                        <div className="relative ml-2 pl-4 border-l-2 border-blue-200 space-y-1">
+                        <div className="relative ml-2 pl-4 border-l-2 border-primary-100 space-y-1">
                           {userNodes.map((n, i) => (
                             <button
                               key={n.id}
@@ -510,10 +518,10 @@ export default function Home() {
                                 // 切换会话后立即滚动可能未挂载，延迟一帧再尝试
                                 setTimeout(() => scrollToMessage(n.id), 50);
                               }}
-                              className="group/node block w-full text-left text-xs text-gray-700 hover:text-blue-700 hover:bg-blue-50 px-2 py-1.5 rounded transition-colors relative"
+                              className="group/node block w-full text-left text-xs text-foreground/80 hover:text-primary-600 hover:bg-primary-50 px-2 py-1.5 rounded transition-colors relative"
                               title={n.text}
                             >
-                              <span className="absolute -left-[21px] top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-blue-400 ring-2 ring-white group-hover/node:bg-blue-600 transition-colors" />
+                              <span className="absolute -left-[21px] top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-primary-400 ring-2 ring-white group-hover/node:bg-primary-600 transition-colors" />
                               <span className="truncate font-medium">
                                 {i + 1}. {n.text.slice(0, 24)}
                               </span>
@@ -530,7 +538,7 @@ export default function Home() {
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
-            className="px-4 py-2 text-xs text-gray-500 border-t border-gray-200 hover:bg-gray-50"
+            className="px-4 py-2 text-xs text-foreground/60 border-t border-border hover:bg-muted"
           >
             收起侧栏
           </button>
@@ -542,7 +550,7 @@ export default function Home() {
         <button
           type="button"
           onClick={() => setSidebarOpen(true)}
-          className="absolute top-3 left-3 z-10 bg-white border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-600 shadow-sm hover:bg-gray-50"
+          className="absolute top-3 left-3 z-10 bg-surface border border-border rounded-md px-2 py-1 text-xs text-foreground/70 shadow-sm hover:bg-muted"
         >
           ☰ 展开
         </button>
@@ -551,13 +559,13 @@ export default function Home() {
       {/* 主聊天区 */}
       <main className="flex-1 flex flex-col min-w-0">
         {/* 顶部导航栏 */}
-        <header className="bg-blue-600 text-white px-4 py-3 shadow-md flex items-center gap-3 shrink-0">
-          <div className="w-9 h-9 bg-white/20 rounded-full flex items-center justify-center text-lg">
-            🎓
+        <header className="bg-primary-600 text-white px-4 py-3 shadow-md flex items-center gap-3 shrink-0">
+          <div className="w-9 h-9 bg-white/20 rounded-full flex items-center justify-center">
+            <Logo size={32} color="#FFFFFF" accent="#8FC0FF" />
           </div>
           <div>
             <h1 className="font-semibold text-sm">校园AI助手</h1>
-            <p className="text-xs text-blue-200">在线 · 随时为你解答</p>
+            <p className="text-xs text-primary-100">在线 · 随时为你解答</p>
           </div>
           <button
             type="button"
@@ -587,8 +595,8 @@ export default function Home() {
         {/* 消息列表 */}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
           {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400 select-none">
-              <div className="text-5xl mb-3">🎓</div>
+            <div className="flex flex-col items-center justify-center h-full text-foreground/40 select-none">
+              <Logo size={64} className="mb-3" />
               <p className="text-sm font-medium">你好！我是校园AI助手</p>
               <p className="text-xs mt-1">有什么关于学校的问题都可以问我~</p>
             </div>
@@ -616,7 +624,7 @@ export default function Home() {
                   } w-full`}
                 >
                   {m.role !== "user" && (
-                    <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm mr-2 shrink-0">
+                    <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm mr-2 shrink-0">
                       🎓
                     </div>
                   )}
@@ -624,8 +632,8 @@ export default function Home() {
                   <div
                     className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed break-words ${
                       m.role === "user"
-                        ? "bg-blue-600 text-white rounded-br-md"
-                        : "bg-white text-gray-800 rounded-bl-md shadow-sm"
+                        ? "bg-primary-600 text-white rounded-br-md"
+                        : "bg-surface text-foreground rounded-bl-md shadow-sm"
                     }`}
                   >
                     {files.length > 0 && (
@@ -644,7 +652,7 @@ export default function Home() {
                   </div>
 
                   {m.role === "user" && (
-                    <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center text-white text-sm ml-2 shrink-0">
+                    <div className="w-8 h-8 bg-ink-400 rounded-full flex items-center justify-center text-white text-sm ml-2 shrink-0">
                       👤
                     </div>
                   )}
@@ -661,10 +669,10 @@ export default function Home() {
 
                 {/* AI 回复：导出加载中提示 */}
                 {m.role === "assistant" && isExportBusy && exportsForThis.length === 0 && (
-                  <div className="ml-10 mt-2 text-[11px] text-gray-400 flex items-center gap-1.5">
-                    <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce [animation-delay:0ms]" />
-                    <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce [animation-delay:150ms]" />
-                    <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce [animation-delay:300ms]" />
+                  <div className="ml-10 mt-2 text-[11px] text-foreground/40 flex items-center gap-1.5">
+                    <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:0ms]" />
+                    <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:150ms]" />
+                    <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:300ms]" />
                     <span className="ml-1">正在生成可导出文件…</span>
                   </div>
                 )}
@@ -675,14 +683,14 @@ export default function Home() {
           {/* AI 正在输入动画 */}
           {isLoading && messages.at(-1)?.role === "user" && (
             <div className="flex justify-start">
-              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm mr-2 shrink-0">
+              <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm mr-2 shrink-0">
                 🎓
               </div>
-              <div className="bg-white px-4 py-3 rounded-2xl rounded-bl-md shadow-sm">
+              <div className="bg-surface px-4 py-3 rounded-2xl rounded-bl-md shadow-sm">
                 <div className="flex gap-1.5">
-                  <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce [animation-delay:0ms]" />
-                  <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce [animation-delay:150ms]" />
-                  <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce [animation-delay:300ms]" />
+                  <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:0ms]" />
+                  <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:150ms]" />
+                  <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:300ms]" />
                 </div>
               </div>
             </div>
@@ -693,11 +701,11 @@ export default function Home() {
 
         {/* 待上传文件预览条 */}
         {pendingFiles.length > 0 && (
-          <div className="bg-white border-t border-gray-200 px-4 py-2 flex flex-wrap gap-2 shrink-0">
+          <div className="bg-surface border-t border-border px-4 py-2 flex flex-wrap gap-2 shrink-0">
             {pendingFiles.map((f, i) => (
               <div
                 key={i}
-                className="relative flex items-center gap-2 bg-gray-100 rounded-md px-2 py-1 pr-6 text-xs text-gray-700"
+                className="relative flex items-center gap-2 bg-muted rounded-md px-2 py-1 pr-6 text-xs text-foreground/80"
               >
                 {isImage(f.mediaType) && f.url ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -713,7 +721,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => removePendingFile(i)}
-                  className="absolute top-0 right-0 text-gray-400 hover:text-red-500 px-1"
+                  className="absolute top-0 right-0 text-foreground/40 hover:text-danger px-1"
                   aria-label="移除"
                 >
                   ×
@@ -726,7 +734,7 @@ export default function Home() {
         {/* 底部输入区 */}
         <form
           onSubmit={handleSubmit}
-          className="bg-white border-t border-gray-200 px-4 py-3 flex items-center gap-2 shrink-0"
+          className="bg-surface border-t border-border px-4 py-3 flex items-center gap-2 shrink-0"
         >
           <input
             ref={fileInputRef}
@@ -740,7 +748,7 @@ export default function Home() {
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={isLoading}
-            className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-600 shrink-0 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="w-10 h-10 bg-muted rounded-full flex items-center justify-center text-foreground/70 shrink-0 hover:bg-border disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             aria-label="上传文件"
           >
             <svg
@@ -760,13 +768,13 @@ export default function Home() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="输入你的问题..."
-            className="flex-1 bg-gray-100 text-gray-900 placeholder:text-gray-500 rounded-full px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-400 focus:bg-white transition-all"
+            className="flex-1 bg-muted text-foreground placeholder:text-foreground/60 rounded-full px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary-400 focus:bg-surface transition-all"
             disabled={isLoading}
           />
           <button
             type="submit"
             disabled={isLoading || (!input.trim() && pendingFiles.length === 0)}
-            className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white shrink-0 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="w-10 h-10 bg-primary-600 rounded-full flex items-center justify-center text-white shrink-0 hover:bg-primary-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <svg
               width="18"
@@ -814,7 +822,7 @@ function FilePreview({
       className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-xs ${
         fromUser
           ? "bg-white/20 text-white"
-          : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+          : "bg-muted text-foreground/80 hover:bg-border"
       }`}
     >
       <span className="text-base">📄</span>
@@ -870,23 +878,23 @@ function ExportFileCard({ file }: { file: ExportFileDescriptor }) {
   };
 
   return (
-    <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm max-w-[280px]">
+    <div className="flex items-center gap-2 bg-surface border border-border rounded-lg px-3 py-2 shadow-sm max-w-[280px]">
       <span className="text-xl">{FORMAT_ICON[file.format]}</span>
       <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-gray-800 truncate" title={file.filename}>
+        <div className="text-xs font-medium text-foreground truncate" title={file.filename}>
           {file.filename}
         </div>
-        <div className="text-[10px] text-gray-500">
+        <div className="text-[10px] text-foreground/60">
           {FORMAT_LABEL[file.format]}
           {file.language ? ` · ${file.language}` : ""}
         </div>
-        {error && <div className="text-[10px] text-red-500 mt-0.5">{error}</div>}
+        {error && <div className="text-[10px] text-danger mt-0.5">{error}</div>}
       </div>
       <button
         type="button"
         onClick={handleDownload}
         disabled={downloading}
-        className="text-[11px] px-2 py-1 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+        className="text-[11px] px-2 py-1 bg-primary-50 text-primary-600 hover:bg-primary-100 rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
       >
         {downloading ? "下载中…" : "下载"}
       </button>

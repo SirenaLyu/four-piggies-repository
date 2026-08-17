@@ -1,20 +1,13 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
 export const metadata: Metadata = {
-  title: "校园AI助手",
-  description: "智能校园助手，随时为你解答学校相关问题",
+  title: {
+    default: "校园AI助手",
+    template: "%s · 校园AI助手",
+  },
+  description: "中科大校园智能助手，随时解答课程、地点、校园生活等各类问题",
+  keywords: ["校园助手", "AI 问答", "中科大", "USTC", "课程查询"],
 };
 
 export default function RootLayout({
@@ -23,11 +16,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-      suppressHydrationWarning
-    >
+    <html lang="zh-CN" className="h-full antialiased" suppressHydrationWarning>
       <body className="h-full overflow-hidden" suppressHydrationWarning>
         {children}
       </body>
