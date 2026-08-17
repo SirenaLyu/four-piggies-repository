@@ -1,0 +1,71 @@
+.intro-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  overflow: hidden;
+  background: #0b1220;
+}
+.intro-stage svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sky-night, .moon, .star, .meteor, .logo-group { opacity: 0; }
+.blur-bg { filter: blur(2px); }
+.camera { transform-origin: 200px 180px; animation: cameraPush 3s cubic-bezier(.25,.6,.2,1) both; }
+
+.ground-line { stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw .4s ease-out .05s forwards; }
+.buildings-near { transform-box: fill-box; transform-origin: bottom; animation: rise 1.0s cubic-bezier(.2,.8,.2,1) .5s both; }
+
+.sky-night { animation: fadein 1.0s ease-in-out 1.6s forwards; }
+.sun      { animation: sundown 1.0s ease-in-out 1.6s forwards; }
+.moon     { animation: fadein .8s ease-in-out 1.85s forwards; }
+.star     { animation: twinkle 2s ease-in-out 1.85s infinite, fadein .6s ease-out 1.85s forwards; }
+
+.night-ambient { opacity: 0; animation: fadein .6s ease-out 2.2s forwards; }
+.lamp-glow { opacity: 0; animation: lampFadeIn .6s ease-out 2.2s forwards; }
+
+.meteor { animation: shoot .9s ease-in 2.5s forwards; }
+.meteor.m2 { animation: shoot .9s ease-in 2.7s forwards; }
+
+.meteor-final { opacity: 0; animation: shootFinal .55s ease-in 3.3s forwards; }
+.logo-group { animation: logoIn .8s cubic-bezier(.2,1.1,.3,1) 3.6s forwards, logoUp .6s ease-out 4.2s forwards; }
+.logo-group .orbit { transform-box: fill-box; transform-origin: center; animation: orbitSpin 6s linear 4.3s infinite; }
+.char { opacity: 0; animation: charIn .5s ease-out forwards; }
+.sky-night { animation: fadein 1.0s ease-in-out 1.6s forwards, fadeout .7s ease-out 4.0s forwards; }
+.moon { animation: fadein .8s ease-in-out 1.85s forwards, fadeout .7s ease-out 4.0s forwards; }
+.star { animation: twinkle 2s ease-in-out 1.85s infinite, fadein .6s ease-out 1.85s forwards, fadeout .7s ease-out 4.0s forwards; }
+.sun { animation: sundown 1.0s ease-in-out 1.6s forwards, sunup .7s ease-out 4.0s forwards; }
+
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeout { from { opacity: 1; } to { opacity: 0; } }
+@keyframes rise { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes sundown { to { transform: translateY(40px); opacity: 0; } }
+@keyframes sunup { to { transform: translateY(0); opacity: 1; } }
+@keyframes twinkle { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+@keyframes lampFadeIn { to { opacity: .15; } }
+@keyframes shoot { 0% { opacity: 0; transform: translate(0,0); } 15% { opacity: 1; } 100% { opacity: 0; transform: translate(-240px,120px); } }
+@keyframes shootFinal { 0% { opacity: 0; transform: translate(0,0); } 20% { opacity: 1; } 100% { opacity: 0; transform: translate(-90px,90px); } }
+@keyframes logoUp { from { transform: translate(0,0) scale(1); } to { transform: translate(-15px,-24px) scale(.62); } }
+@keyframes orbitSpin { to { transform: rotate(360deg); } }
+@keyframes logoIn { from { opacity: 0; transform: translate(35px,-18px) scale(.65); } to { opacity: 1; transform: translate(0,0) scale(1); } }
+@keyframes cameraPush { from { transform: scale(1.1); } to { transform: scale(1); } }
+@keyframes charIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+.bird { animation: birdFly 14s ease-in-out infinite; }
+.bird.b2 { animation-delay: 3.5s; animation-duration: 18s; }
+.bird.b3 { animation-delay: 7s; animation-duration: 16s; }
+@keyframes birdFly { 0% { transform: translate(0,0); opacity: 0; } 10% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translate(-220px,-25px); opacity: 0; } }
+
+.sun-halo  { transform-box: fill-box; transform-origin: center; animation: haloPulse 3s ease-in-out infinite; }
+.moon-float { animation: moonFloat 4.5s ease-in-out infinite; }
+.moon-halo { transform-box: fill-box; transform-origin: center; animation: haloPulse 4.5s ease-in-out infinite; }
+@keyframes haloPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.3); } }
+@keyframes moonFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+.silver { animation: silverTwinkle 2.5s ease-in-out infinite; }
+.silver-fall { animation: silverFall 3s ease-in infinite; }
+@keyframes silverTwinkle { 0%,100% { opacity: 0; } 50% { opacity: 1; } }
+@keyframes silverFall { 0% { transform: translateY(0); opacity: 0; } 20% { opacity: 1; } 100% { transform: translateY(30px); opacity: 0; } }
+.sparkle { transform-box: fill-box; transform-origin: center; animation: sparkleAnim 1.8s ease-in-out infinite; }
+@keyframes sparkleAnim { 0%,100% { transform: scale(0); opacity: 0; } 50% { transform: scale(1); opacity: 1; } }
