@@ -356,7 +356,7 @@ async function searchRouted(userQuery: string): Promise<{
     value: userQuery,
   });
 
-  const { primary, secondary } = await classifyWithEmbedding(embedding);
+  const { primary, secondary } = await classifyWithEmbedding(embedding, userQuery);
   const cats: Category[] = [primary, secondary].filter(
     (c): c is Category => c !== null && c !== "fallback",
   );

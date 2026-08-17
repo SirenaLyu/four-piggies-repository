@@ -862,7 +862,7 @@ async function main(): Promise<void> {
     });
 
     // 2. 分类器路由
-    const { primary, secondary } = await classifyWithEmbedding(embedding);
+    const { primary, secondary } = await classifyWithEmbedding(embedding, c.query);
 
     // 3. Supabase:贴近生产 searchRouted —— 路由后的 primary + secondary 都查,
     //    fallback 时走 match_documents(文档表为空,如实记录)

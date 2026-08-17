@@ -25,7 +25,7 @@ const queries = [
 ];
 for (const q of queries) {
   const { embedding } = await embed({ model: emb.embedding("BAAI/bge-m3"), value: q });
-  const { primary, secondary, scores } = await classifyWithEmbedding(embedding);
+  const { primary, secondary, scores } = await classifyWithEmbedding(embedding, q);
   const top3 = Object.entries(scores).sort(([, a], [, b]) => b - a).slice(0, 3).map(([c, s]) => `${c}=${s.toFixed(3)}`).join("  ");
   console.log(`"${q}" → ${primary}${secondary ? "+" + secondary : ""}  top3: ${top3}`);
 }
