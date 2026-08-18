@@ -58,6 +58,27 @@ const queries = [
     query: "我下周想找地方自习,顺便问下图书馆开放时间",
     expectKeywords: ["图书馆", "开放"],
   },
+  // ===== 8/18 新增 real-time 工具测试 =====
+  {
+    name: "real-time calendar 按日期查询(2026-10-01 国庆)",
+    query: "2026年10月1日是节假日吗,校历上写什么",
+    expectKeywords: ["国庆", "休"],
+  },
+  {
+    name: "real-time calendar 相对日期(明天)",
+    query: "明天校历上有什么安排",
+    expectKeywords: ["2026-08", "校历"],
+  },
+  {
+    name: "real-time shuttle 周末过滤(根治 8/16 Dify 失败)",
+    query: "周末有班车吗",
+    expectKeywords: ["周末", "班"], // 期望回答"周末无班次"
+  },
+  {
+    name: "real-time shuttle 工作日过滤",
+    query: "工作日去高新园区有哪些班次",
+    expectKeywords: ["高新", "班"],
+  },
 ];
 
 let pass = 0;

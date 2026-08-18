@@ -377,6 +377,103 @@ const EVAL_CASES: EvalCase[] = [
     expectedKeywords: ["选课", "奖学金"],
     note: "跨类目干扰(notices 主 + scholarships 副)",
   },
+
+  // ===== 8/18 新增 13 条(扩到 60 条,覆盖原 9 工具弱场景) =====
+
+  // calendar 多学期聚合 + 范围事件
+  {
+    query: "2026 春季和秋季注册日分别是什么时候",
+    expectedCategory: "calendar",
+    expectedKeywords: ["开学注册", "注册"],
+    note: "8/18 新增:多学期聚合提问,期望返回两条开学注册事件",
+  },
+  {
+    query: "考试周持续到几号",
+    expectedCategory: "calendar",
+    expectedKeywords: ["考试", "期末"],
+    note: "8/18 新增:范围事件提问(考试周有 start/end 跨多日)",
+  },
+  {
+    query: "春季学期什么时候开始上课",
+    expectedCategory: "calendar",
+    expectedKeywords: ["开始上课", "春季"],
+    note: "8/18 新增:具体学期+具体事件类型",
+  },
+
+  // shuttle 边界校区组合 + 时段聚合
+  {
+    query: "南区到东区最早一班班车几点",
+    expectedCategory: "shuttle",
+    expectedKeywords: ["南区", "东区"],
+    note: "8/18 新增:边界校区组合,验证召回(数据里有南区→东区 08:00 班次)",
+  },
+  {
+    query: "上午去高新园区有几班车",
+    expectedCategory: "shuttle",
+    expectedKeywords: ["高新", "07:30", "12:30"],
+    note: "8/18 新增:时段聚合(上午班次)",
+  },
+  {
+    query: "晚上从高新回东区最晚几点",
+    expectedCategory: "shuttle",
+    expectedKeywords: ["高新", "东区", "20"],
+    note: "8/18 新增:返程+最晚时段(期望命中返程 20:00 或 21:00 班次)",
+  },
+
+  // notices 聚合 + 类别过滤
+  {
+    query: "教务处最近发布了哪些通知",
+    expectedCategory: "notices",
+    expectedKeywords: ["教务处", "通知"],
+    note: "8/18 新增:多通知聚合问法",
+  },
+  {
+    query: "关于考试的通知有哪些",
+    expectedCategory: "notices",
+    expectedKeywords: ["考试"],
+    note: "8/18 新增:类别过滤(数据里有考试相关通知)",
+  },
+
+  // library 分馆 + 楼层 + 服务复合
+  {
+    query: "西区图书馆 1 楼 借阅服务开放时间",
+    expectedCategory: "library",
+    expectedKeywords: ["西区", "1楼", "借阅"],
+    note: "8/18 新增:分馆+楼层+服务三重限定",
+  },
+
+  // scholarships 联系方式专项
+  {
+    query: "雪迪龙奖学金联系电话和邮箱",
+    expectedCategory: "scholarships",
+    expectedKeywords: ["雪迪龙", "636"],
+    note: "8/18 新增:联系方式专项(电话以 636 开头)",
+  },
+
+  // poi AED 通用 + 紧急
+  {
+    query: "东区有哪些 AED 急救设备",
+    expectedCategory: "poi",
+    expectedKeywords: ["AED", "东区"],
+    note: "8/18 新增:AED 通用查询(不限具体楼宇)",
+  },
+
+  // courses 英文名查询
+  {
+    query: "Quantum Mechanics 这门课的代码是多少",
+    expectedCategory: "courses",
+    expectedKeywords: ["Quantum", "量子力学", "022"],
+    note: "8/18 新增:英文名查询,期望命中量子力学系列课程代码",
+  },
+
+  // 跨类多步组合(library+shuttle)
+  {
+    query: "我想去西区图书馆还书,顺便坐班车去高新,该怎么安排",
+    expectedCategory: "library",
+    expectedSubsidiary: "shuttle",
+    expectedKeywords: ["西区", "图书馆", "高新", "班车"],
+    note: "8/18 新增:多步组合,期望 library 主 + shuttle 副(实际 tool calling 下 LLM 会调 search_library_hours + search_shuttle)",
+  },
 ];
 
 // ===== Dify dataset_id 映射(仅 5 个有对应库) =====
