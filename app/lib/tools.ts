@@ -370,6 +370,122 @@ export const searchDifyFallbackTool = tool({
   },
 });
 
+// ===== 10. 校历事件按日期精确查询(real-time) =====
+//
+// 与 search_calendar(向量相似查"什么时候开学")正交:这个工具是精确日期查询,
+// 输入具体日期(YYYY-MM-DD),返回当天命中的校历事件(节假日/考试周/注册日/
+// 调休补课)。让 LLM 能回答"下周二有课吗""2026-08-25 是节假日吗"这类基于
+// 具体日期的问题,而不是只能做语义相似查询。
+
+export const getCalendarEventsOnDateTool = tool({
+  description:
+    "查询某个具体日期(YYYY-MM-DD)当天命中的校历事件——节假日、考试周、开学注册、调休补课等。当用户问'某天有课吗''某天是节假日吗''下周二/这周五/8月25日 校历上是什么日子'等需要按具体日期判断的问题时调用。注意:这个工具不能告诉 LLM '某教室某时段是否空置'(课程表数据没有教室+时间字段),只能基于校历事件判断'该日是否节假日/调休/注册日'。",
+  inputSchema: jsonSchema<{ date: string }>({
+    type: "object",
+    properties: {
+      date: {
+        type: "string",
+        description: "YYYY-MM-DD 格式的具体日期,如 '2026-08-25'。如果用户说'下周二'/'这周五',先解析成具体日期再传入。",
+      },
+    },
+    required: ["date"],
+  }),
+  execute: async ({ date }) => {
+    // 简单日期格式校验,防 LLM 传"下周二"未解析的字符串
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return { error: `日期格式必须是 YYYY-MM-DD,收到 "${date}"`, results: [] };
+    }
+    const { data, error } = await supabase
+      .from("campus_calendar")
+      .select("event_title, start_date, end_date, semester, academic_year, source_url")
+      .lte("start_date", date)
+      .gte("end_date", date)
+      .order("start_date");
+    if (error) return { error: error.message, results: [] };
+
+    // 过滤脏数据:爬虫偶发把纯数字/单字符当 event_title(如 "26"),这类无意义
+    const cleaned = (data ?? []).filter(
+      (e: Record<string, unknown>) =>
+        typeof e.event_title === "string" && e.event_title.trim().length >= 2,
+    );
+    return {
+      query_date: date,
+      weekday: new Date(date + "T00:00:00").toLocaleDateString("zh-CN", { weekday: "long" }),
+      count: cleaned.length,
+      results: cleaned.map((e: Record<string, unknown>) => ({
+        event_title: e.event_title,
+        start_date: e.start_date,
+        end_date: e.end_date,
+        semester: e.semester,
+        academic_year: e.academic_year,
+        source_url: e.source_url,
+      })),
+      note: cleaned.length === 0 ? "该日不在校历任何事件范围内(可能是普通教学日)" : undefined,
+    };
+  },
+});
+
+// ===== 11. 按星期几精确过滤班车(real-time) =====
+//
+// 8/16 eval 里 Dify 失败的"周末有班车吗"——reranker 把"东区→西区 点对点"排到
+// top1 而不是"周末班次"信息。这个工具按 weekday_only 字段精确过滤,根治该类问题。
+//
+// 数据现状(8/18 验证):campus_shuttle 29 条记录全部 weekday_only='true'(工作日班次),
+// 没有周末班次数据。所以"周末有班车吗"会返回 0 条,LLM 据此明确回答"暂无周末班次"。
+
+export const getShuttleOnDayTool = tool({
+  description:
+    "按星期几精确过滤班车班次。当用户问'周末有班车吗''周六去高新有什么班次''工作日班车时刻表'等需要按星期几过滤的问题时调用。input 的 weekday 必须是:周一/周二/周三/周四/周五/周六/周日/工作日/周末 之一。",
+  inputSchema: jsonSchema<{ weekday: string }>({
+    type: "object",
+    properties: {
+      weekday: {
+        type: "string",
+        description: "星期几,必须是:周一/周二/周三/周四/周五/周六/周日/工作日/周末 之一",
+        enum: ["周一", "周二", "周三", "周四", "周五", "周六", "周日", "工作日", "周末"],
+      },
+    },
+    required: ["weekday"],
+  }),
+  execute: async ({ weekday }) => {
+    // weekday_only='true' 表示工作日班次,'false' 表示每日(含周末)班次
+    // 周一~周五/工作日 → 两种都跑(工作日班次 + 每日班次)
+    // 周六/周日/周末 → 只跑每日班次
+    const isWeekend = weekday === "周六" || weekday === "周日" || weekday === "周末";
+
+    let query = supabase
+      .from("campus_shuttle")
+      .select("route_name, direction, departure, arrival, depart_time, arrive_time, weekday_only, period, note")
+      .order("depart_time");
+    if (isWeekend) {
+      query = query.eq("weekday_only", "false");
+    } else {
+      // 工作日:返回所有(目前数据全是 weekday_only='true')
+      query = query.in("weekday_only", ["true", "false"]);
+    }
+    const { data, error } = await query;
+    if (error) return { error: error.message, results: [] };
+
+    return {
+      query_weekday: weekday,
+      is_weekend: isWeekend,
+      count: data?.length ?? 0,
+      results: (data ?? []).map((s: Record<string, unknown>) => ({
+        route_name: s.route_name,
+        direction: s.direction,
+        departure: s.departure,
+        arrival: s.arrival,
+        depart_time: s.depart_time,
+        arrive_time: s.arrive_time,
+        weekday_only: s.weekday_only === "true" ? "工作日" : "每日含周末",
+        period: s.period,
+        note: s.note,
+      })),
+      note: (data?.length ?? 0) === 0 ? `当前数据库中${isWeekend ? "周末" : "工作日"}无对应班次记录` : undefined,
+    };
+  },
+});
+
 // ===== 工具集合 =====
 
 export const campusTools = {
@@ -382,4 +498,6 @@ export const campusTools = {
   search_courses: searchCoursesTool,
   find_substitute_courses: findSubstituteCoursesTool,
   search_dify_fallback: searchDifyFallbackTool,
+  get_calendar_events_on_date: getCalendarEventsOnDateTool,
+  get_shuttle_on_day: getShuttleOnDayTool,
 };
