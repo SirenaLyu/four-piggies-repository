@@ -1,6 +1,6 @@
 # RAG 双后端检索质量对比评估报告
 
-**生成时间**:2026-08-17T13:22:44.973Z
+**生成时间**:2026-08-18T01:10:00.710Z
 **评估集大小**:47 条 query
 **类目分布**:`calendar`=7, `shuttle`=7, `notices`=7, `library`=6, `scholarships`=6, `poi`=6, `courses`=6, `fallback`=2
 
