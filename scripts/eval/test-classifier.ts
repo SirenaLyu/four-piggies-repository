@@ -1,14 +1,14 @@
 /**
  * 分类器探针测试 —— 验证 8 个典型 query 的 routing 是否正确
  *
- * 用法: npx tsx scripts/test-classifier.ts
+ * 用法: npx tsx scripts/eval/test-classifier.ts
  *
  * 不需要 Supabase,只测 classifier.ts 的 embedding + 余弦 + 阈值逻辑。
  */
 
 import * as fs from "fs";
 import * as path from "path";
-import type { Category } from "../app/lib/classifier";
+import type { Category } from "../../app/lib/classifier";
 
 // 必须在 import classifier 之前加载 .env.local,
 // 否则 classifier.ts 顶层 import ai-clients 时 process.env 还没就绪
@@ -39,7 +39,7 @@ const { embed } = require("ai");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { createOpenAI } = require("@ai-sdk/openai");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { classifyWithEmbedding } = require("../app/lib/classifier");
+const { classifyWithEmbedding } = require("../../app/lib/classifier");
 
 const PROBES: Array<{ query: string; expected: Category; label: string }> = [
   { query: "2026 秋季什么时候开学", expected: "calendar", label: "校历" },

@@ -10,10 +10,10 @@
  *      栏目:2298 公示栏 / 2306 奖助学金 / 2305 助学贷款 / 2304 勤工助学
  *
  * 与 crawl-ustc.ts 独立,不污染 8/10 已验证的 POI/课程爬虫。
- * 用法：npx tsx scripts/crawl-ustc-extra.ts
- *      npx tsx scripts/crawl-ustc-extra.ts --only=calendar
- *      npx tsx scripts/crawl-ustc-extra.ts --only=notices,library
- *      npx tsx scripts/crawl-ustc-extra.ts --only=scholarships --scholarship-pages=4
+ * 用法：npx tsx scripts/crawl/crawl-ustc-extra.ts
+ *      npx tsx scripts/crawl/crawl-ustc-extra.ts --only=calendar
+ *      npx tsx scripts/crawl/crawl-ustc-extra.ts --only=notices,library
+ *      npx tsx scripts/crawl/crawl-ustc-extra.ts --only=scholarships --scholarship-pages=4
  */
 
 import { promises as fs } from "node:fs";

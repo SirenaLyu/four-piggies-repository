@@ -13,7 +13,7 @@ for (const line of envText.split("\n")) {
 }
 const { embed } = await import("ai");
 const { createOpenAI } = await import("@ai-sdk/openai");
-const { classifyWithEmbedding } = await import("../app/lib/classifier.ts");
+const { classifyWithEmbedding } = await import("../../app/lib/classifier.ts");
 const emb = createOpenAI({ baseURL: process.env.EMBEDDING_BASE_URL, apiKey: process.env.EMBEDDING_API_KEY });
 const queries = [
   "暑期公共教室开放吗",

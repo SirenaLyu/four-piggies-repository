@@ -11,7 +11,7 @@
  * 推荐配置(8/16 实验得出):semantic_search + bge-reranker-v2-m3 + top_k=5 + 无阈值
  */
 
-import type { Category } from "./classifier";
+import type { Category } from "../classifier";
 
 const DIFY_BASE = "http://114.214.241.106/v1";
 const DIFY_API_KEY = process.env.DIFY_API_KEY ?? "dataset-tGSTzWOdMMWOLXnAMyEIT8ff";
@@ -66,6 +66,9 @@ export async function searchDify(
   };
 
   try {
+    // 15s 超时：Dify 服务不可达时快速失败，让上层降级到下一层
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
     const res = await fetch(`${DIFY_BASE}/datasets/${datasetId}/retrieve`, {
       method: "POST",
       headers: {
@@ -73,7 +76,9 @@ export async function searchDify(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     if (!res.ok) {
       console.error(`[dify] HTTP ${res.status} for ${category}: ${await res.text()}`);
       return "";

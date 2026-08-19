@@ -16,4 +16,7 @@ export const embeddingClient = createOpenAI({
 
 export const EMBEDDING_MODEL = "BAAI/bge-m3";
 
-export const CHAT_MODEL = "deepseek-v4-flash-ascend";
+// 对话模型：可通过环境变量 CHAT_MODEL 随时切换
+// 学校代理可用模型实测：deepseek-v4-flash-ascend / qwen-chat / qwen3.6-chat 等
+// （同一模型在不同时段首 token 延迟波动极大，慢时可切换试试）
+export const CHAT_MODEL = process.env.CHAT_MODEL?.trim() || "deepseek-v4-flash-ascend";

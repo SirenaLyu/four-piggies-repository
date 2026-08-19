@@ -274,3 +274,28 @@ ${ctx.context}
 ${FORMAT_RULES}${NO_HALLUCINATION_FOOTER}`;
 }
 
+// ===== Tavily 官网搜索模板(第三层兜底,Supabase/Dify 均无命中时使用) =====
+//
+// Tavily 返回的是官网搜索摘要 + 相关链接列表(带【官网搜索】前缀),
+// 与 Supabase 的中文前缀格式、Dify 的 key: value 格式都不同,需要单独一套模板。
+
+/**
+ * Tavily 官网搜索兜底模板:知识库(Supabase + Dify)均无命中时,
+ * 引导 LLM 基于官网搜索摘要回答,并要求标注来源为"学校官网搜索"。
+ */
+export function TAVILY_PROMPT(ctx: PromptCtx): string {
+  return `${BASE_IDENTITY}
+当前问题在校园知识库中未检索到相关内容,系统改从学校官网(ustc.edu.cn)搜索到以下结果。
+
+请基于以下官网搜索结果回答:
+${ctx.context}
+
+回答要求:
+- 优先采用"【官网搜索】摘要"部分的信息回答
+- 若摘要不足以回答,从"相关链接"的各条标题与内容中综合
+- 在回答末尾列出相关的来源链接("🔗 链接: <url>")
+- 明确告知用户:该信息来自学校官网实时搜索,建议点击链接核实详情
+- 若搜索结果与问题无关或不足,直接回复"暂无相关信息",不要编造
+${FORMAT_RULES}${NO_HALLUCINATION_FOOTER}`;
+}
+

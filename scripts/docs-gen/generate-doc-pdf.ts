@@ -15,7 +15,8 @@ import puppeteer from "puppeteer-core";
 
 // ===== 配置 =====
 
-const PROJECT_ROOT = path.resolve(__dirname, "..");
+// 本文件位于 scripts/docs-gen/ 下，项目根目录需上溯两级
+const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 const MD_PATH = path.join(PROJECT_ROOT, "docs", "AI助手功能与使用指南.md");
 const OUTPUT_DIR = "F:\\26Spring\\12V-FoT";
 const OUTPUT_FILENAME = "校园AI助手功能与使用指南.pdf";

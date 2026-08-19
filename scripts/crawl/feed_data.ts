@@ -2,7 +2,7 @@
  * 学校资料录入脚本 —— 将文本转为向量并存入 Supabase campus_documents 表
  *
  * 用法:
- *   npx tsx scripts/feed_data.ts
+ *   npx tsx scripts/crawl/feed_data.ts
  *
  * 依赖:
  *   - @ai-sdk/openai   → 对接硅基流动兼容 OpenAI 的 embedding API

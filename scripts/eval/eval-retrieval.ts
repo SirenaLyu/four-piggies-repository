@@ -9,9 +9,9 @@
  * 比较两边 top-1 / top-3 是否命中标注关键词,输出命中率 + MRR + 失败案例。
  *
  * 用法:
- *   npx tsx scripts/eval-retrieval.ts
- *   npx tsx scripts/eval-retrieval.ts --only=library,scholarships   # 只跑指定类目
- *   npx tsx scripts/eval-retrieval.ts --verbose                       # 打印每个 hit 的 top-1 内容
+ *   npx tsx scripts/eval/eval-retrieval.ts
+ *   npx tsx scripts/eval/eval-retrieval.ts --only=library,scholarships   # 只跑指定类目
+ *   npx tsx scripts/eval/eval-retrieval.ts --verbose                       # 打印每个 hit 的 top-1 内容
  *
  * 输出:
  *   - 控制台:命中表 + MRR 表 + 失败案例
@@ -51,7 +51,7 @@ const { createOpenAI } = require("@ai-sdk/openai");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { createClient } = require("@supabase/supabase-js");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { classifyWithEmbedding } = require("../app/lib/classifier");
+const { classifyWithEmbedding } = require("../../app/lib/classifier");
 
 // ===== 类型 =====
 type Category =

@@ -11,11 +11,11 @@
  *      → 每行拼成一段文本 → 向量化 → 插入对应表(truncate-then-insert)
  *
  * 用法:
- *   npx tsx scripts/feed_crawled_data.ts            # 全量
- *   npx tsx scripts/feed_crawled_data.ts --dry-run  # 不写库,只打印
- *   npx tsx scripts/feed_crawled_data.ts --only=pois   # 只跑 POI
- *   npx tsx scripts/feed_crawled_data.ts --only=courses # 只跑课程
- *   npx tsx scripts/feed_crawled_data.ts --only=calendar,shuttle,notices,library,scholarships  # 只跑 5 类新数据
+ *   npx tsx scripts/crawl/feed_crawled_data.ts            # 全量
+ *   npx tsx scripts/crawl/feed_crawled_data.ts --dry-run  # 不写库,只打印
+ *   npx tsx scripts/crawl/feed_crawled_data.ts --only=pois   # 只跑 POI
+ *   npx tsx scripts/crawl/feed_crawled_data.ts --only=courses # 只跑课程
+ *   npx tsx scripts/crawl/feed_crawled_data.ts --only=calendar,shuttle,notices,library,scholarships  # 只跑 5 类新数据
  *
  * 前置:
  *   1. 已在 Supabase Dashboard 跑过 supabase/migrations/0001_campus_pois_courses.sql
@@ -69,7 +69,7 @@ const DATA_DIR = "D:\\ustc-data";
 const POI_FILE = path.join(DATA_DIR, "map-poi-all.json");
 const SUBSTITUTES_FILE = path.join(DATA_DIR, "catalog-substitute.json");
 
-// 8/15 新增 5 类 CSV(由 scripts/crawl-ustc-extra.ts 产出)
+// 8/15 新增 5 类 CSV(由 scripts/crawl/crawl-ustc-extra.ts 产出)
 const CALENDAR_CSV = path.join(DATA_DIR, "calendar.csv");
 const SHUTTLE_CSV = path.join(DATA_DIR, "shuttle.csv");
 const NOTICES_CSV = path.join(DATA_DIR, "notices.csv");
@@ -776,10 +776,10 @@ async function main(): Promise<void> {
 
   // 旧的 8/10 数据(pois/courses)文件存在性检查,只在跑这两个时校验
   if (shouldRun("pois") && !fs.existsSync(POI_FILE)) {
-    throw new Error(`找不到 ${POI_FILE},请先跑 scripts/crawl-ustc.ts`);
+    throw new Error(`找不到 ${POI_FILE},请先跑 scripts/crawl/crawl-ustc.ts`);
   }
   if (shouldRun("courses") && !fs.existsSync(SUBSTITUTES_FILE)) {
-    throw new Error(`找不到 ${SUBSTITUTES_FILE},请先跑 scripts/crawl-ustc.ts`);
+    throw new Error(`找不到 ${SUBSTITUTES_FILE},请先跑 scripts/crawl/crawl-ustc.ts`);
   }
 
   if (shouldRun("pois")) await feedPois(dryRun);

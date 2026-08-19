@@ -7,10 +7,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "gen-doc": "tsx scripts/generate-doc-pdf.ts",
-    "crawl": "tsx scripts/crawl-ustc.ts",
-    "crawl-extra": "tsx scripts/crawl-ustc-extra.ts",
-    "feed-crawled": "tsx scripts/feed_crawled_data.ts"
+    "eval": "tsx scripts/eval/eval-retrieval.ts",
+    "test-classifier": "tsx scripts/eval/test-classifier.ts",
+    "check-tables": "tsx scripts/check-tables.ts",
+    "crawl": "tsx scripts/crawl/crawl-ustc.ts",
+    "crawl-extra": "tsx scripts/crawl/crawl-ustc-extra.ts",
+    "feed-crawled": "tsx scripts/crawl/feed_crawled_data.ts",
+    "feed-docs": "tsx scripts/crawl/feed_data.ts",
+    "gen-doc": "tsx scripts/docs-gen/generate-doc-pdf.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.23",

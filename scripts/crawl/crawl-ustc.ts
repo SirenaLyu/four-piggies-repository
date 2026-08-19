@@ -7,7 +7,7 @@
  *   2. https://catalog.ustc.edu.cn/api/teach/course-substitute-pool/list
  *      课程替代池数据
  *
- * 用法：npx tsx scripts/crawl-ustc.ts
+ * 用法：npx tsx scripts/crawl/crawl-ustc.ts
  */
 
 import { promises as fs } from "node:fs";

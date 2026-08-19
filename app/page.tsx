@@ -1,134 +1,49 @@
 "use client";
 
+/**
+ * 校园AI助手主页面
+ *
+ * 职责：全局状态编排（会话列表/活动会话/聊天流/导出）+ UI 组合。
+ * 展示细节在 components/chat/ 各组件中，会话持久化在 conversation-storage.ts。
+ */
+
 import { useChat } from "@ai-sdk/react";
-import { TextStreamChatTransport, type UIMessage, type FileUIPart } from "ai";
+import { TextStreamChatTransport, type FileUIPart, type UIMessage } from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  downloadExportFile,
-  type ExportFileDescriptor,
-} from "./lib/export";
-import { MarkdownRenderer } from "./components/MarkdownRenderer";
-import { Logo } from "./components/Logo";
 import { IntroAnimation } from "./components/IntroAnimation";
+import { Logo } from "./components/Logo";
+import { ConversationSidebar } from "./components/chat/ConversationSidebar";
+import { MessageBubble } from "./components/chat/MessageBubble";
+import {
+  deleteConversationStorage,
+  generateChatId,
+  loadConversationMessages,
+  loadConversations,
+  saveConversationMessages,
+  saveConversations,
+  type ConversationSummary,
+} from "./components/chat/conversation-storage";
+import {
+  fileToDataUrl,
+  getMessageText,
+  isImage,
+} from "./components/chat/message-utils";
+import type { ExportFileDescriptor } from "./lib/export";
 
-// ===== 本地会话持久化 =====
+// ===== 类型 =====
 
-type ConversationSummary = {
-  id: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-};
-
-const STORAGE_KEY = "campus-ai-conversations";
-
-function loadConversations(): ConversationSummary[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as ConversationSummary[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+interface SummarizeResponse {
+  title?: string;
 }
 
-function saveConversations(list: ConversationSummary[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+interface ExportResponse {
+  files?: ExportFileDescriptor[];
 }
-
-function loadConversationMessages(id: string): UIMessage[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(`${STORAGE_KEY}:${id}`);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as UIMessage[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveConversationMessages(id: string, messages: UIMessage[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(`${STORAGE_KEY}:${id}`, JSON.stringify(messages));
-}
-
-function deleteConversationStorage(id: string) {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(`${STORAGE_KEY}:${id}`);
-  const list = loadConversations().filter((c) => c.id !== id);
-  saveConversations(list);
-}
-
-function makeId() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function generateChatId() {
-  return `chat-${makeId()}`;
-}
-
-// ===== UI 帮助函数 =====
-
-function getMessageText(m: UIMessage) {
-  return m.parts
-    .filter((p) => p.type === "text")
-    .map((p) => (p as { text?: string }).text ?? "")
-    .join("");
-}
-
-function getMessageFiles(m: UIMessage): FileUIPart[] {
-  return m.parts.filter((p) => p.type === "file") as FileUIPart[];
-}
-
-function isImage(mediaType: string) {
-  return mediaType.startsWith("image/");
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-// 将 File 转为带 data URL 的 FileUIPart
-function fileToDataUrl(file: File): Promise<FileUIPart> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error);
-    reader.onload = () => {
-      resolve({
-        type: "file",
-        mediaType: file.type || "application/octet-stream",
-        filename: file.name,
-        url: String(reader.result),
-      });
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-function formatTime(ts: number) {
-  const d = new Date(ts);
-  const now = new Date();
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  if (sameDay) return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-// ===== 主组件 =====
 
 export default function Home() {
+  // ===== 状态 =====
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [showIntro, setShowIntro] = useState(true);
-  const handleIntroFinish = useCallback(() => setShowIntro(false), []);
   const [activeId, setActiveId] = useState<string>(() => generateChatId());
   const [hydrated, setHydrated] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<FileUIPart[]>([]);
@@ -138,12 +53,17 @@ export default function Home() {
     Record<string, ExportFileDescriptor[]>
   >({});
   const [exportBusy, setExportBusy] = useState<Set<string>>(new Set());
+  const [input, setInput] = useState("");
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const exportInFlightRef = useRef<Set<string>>(new Set());
+  // ref 镜像：供 onFinish 等回调读取最新值，避免闭包陈旧
   const conversationsRef = useRef<ConversationSummary[]>([]);
   const activeIdRef = useRef<string>(activeId);
+
+  // ===== 初始化与 ref 同步 =====
 
   // 初始化时从 localStorage 读取会话列表
   useEffect(() => {
@@ -153,7 +73,6 @@ export default function Home() {
     setHydrated(true);
   }, []);
 
-  // 同步 ref，避免 onFinish 闭包陈旧
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
@@ -167,37 +86,42 @@ export default function Home() {
   );
 
   // ===== AI 标题总结 =====
-  const summarizeConversation = useCallback(async (convoId: string, msgs: UIMessage[]) => {
-    const payload = {
-      messages: msgs
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .slice(0, 2)
-        .map((m) => ({ role: m.role, text: getMessageText(m).slice(0, 4000) })),
-    };
-    if (payload.messages.length < 2) return;
-    try {
-      const res = await fetch("/api/summarize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) return;
-      const data = (await res.json()) as { title?: string };
-      if (!data.title) return;
-      const newTitle = data.title;
-      setConversations((prev) => {
-        const next = prev.map((c) =>
-          c.id === convoId ? { ...c, title: newTitle, updatedAt: Date.now() } : c,
-        );
-        saveConversations(next);
-        return next;
-      });
-    } catch {
-      // 静默失败，保留占位符标题
-    }
-  }, []);
+
+  const summarizeConversation = useCallback(
+    async (convoId: string, msgs: UIMessage[]) => {
+      const payload = {
+        messages: msgs
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .slice(0, 2)
+          .map((m) => ({ role: m.role, text: getMessageText(m).slice(0, 4000) })),
+      };
+      if (payload.messages.length < 2) return;
+      try {
+        const res = await fetch("/api/summarize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as SummarizeResponse;
+        if (!data.title) return;
+        const newTitle = data.title;
+        setConversations((prev) => {
+          const next = prev.map((c) =>
+            c.id === convoId ? { ...c, title: newTitle, updatedAt: Date.now() } : c,
+          );
+          saveConversations(next);
+          return next;
+        });
+      } catch {
+        // 静默失败，保留占位符标题
+      }
+    },
+    [],
+  );
 
   // ===== 导出文件生成 =====
+
   const generateExportsForMessage = useCallback(
     async (assistantMessageId: string, msgs: UIMessage[]) => {
       if (exportInFlightRef.current.has(assistantMessageId)) return;
@@ -215,7 +139,7 @@ export default function Home() {
           body: JSON.stringify(payload),
         });
         if (!res.ok) return;
-        const data = (await res.json()) as { files?: ExportFileDescriptor[] };
+        const data = (await res.json()) as ExportResponse;
         if (!data.files || data.files.length === 0) return;
         setExportsByMessage((prev) => ({ ...prev, [assistantMessageId]: data.files! }));
       } catch {
@@ -231,6 +155,8 @@ export default function Home() {
     },
     [],
   );
+
+  // ===== 聊天流 =====
 
   const { messages, sendMessage, status } = useChat<UIMessage>({
     id: activeId,
@@ -309,7 +235,6 @@ export default function Home() {
       ];
     }
     saveConversations(merged);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setConversations(merged);
     // 故意不依赖 conversations；用 ref 读取最新值，指纹变化才重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -318,8 +243,7 @@ export default function Home() {
   // ===== 事件处理 =====
 
   const startNewConversation = () => {
-    const newId = generateChatId();
-    setActiveId(newId);
+    setActiveId(generateChatId());
     setPendingFiles([]);
   };
 
@@ -401,7 +325,7 @@ export default function Home() {
     setPendingFiles([]);
   };
 
-  const [input, setInput] = useState("");
+  const handleIntroFinish = useCallback(() => setShowIntro(false), []);
 
   // ===== 渲染 =====
 
@@ -417,121 +341,20 @@ export default function Home() {
           sidebarOpen ? "w-72" : "w-0"
         } shrink-0 transition-all duration-200 overflow-hidden bg-surface border-r border-border flex flex-col`}
       >
-        <div className="w-72 h-full flex flex-col">
-          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-foreground/80">历史会话</h2>
-            <button
-              type="button"
-              onClick={startNewConversation}
-              className="text-xs px-2 py-1 rounded-md bg-primary-50 text-primary-600 hover:bg-primary-100 transition-colors"
-            >
-              + 新对话
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {conversations.length === 0 && (
-              <div className="px-4 py-6 text-center text-xs text-foreground/40">
-                还没有会话记录
-              </div>
-            )}
-            {conversations.map((c) => {
-              const isActive = c.id === activeId;
-              const isExpanded = expandedConvos.has(c.id);
-              // 从 localStorage 读取该会话的用户问题节点
-              const convoMessages = hydrated ? loadConversationMessages(c.id) : [];
-              const userNodes = convoMessages
-                .filter((m) => m.role === "user")
-                .map((m) => ({
-                  id: m.id,
-                  text: getMessageText(m).trim(),
-                }))
-                .filter((n) => n.text.length > 0);
-              return (
-                <div
-                  key={c.id}
-                  className={`group border-b border-border transition-colors ${
-                    isActive ? "bg-primary-50" : "hover:bg-muted"
-                  }`}
-                >
-                  <div
-                    onClick={() => selectConversation(c.id)}
-                    className={`px-3 py-3 cursor-pointer flex items-start gap-2 ${
-                      isActive ? "text-primary-600" : "text-foreground/80"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleConvoExpanded(c.id);
-                      }}
-                      className={`mt-0.5 w-4 h-4 flex items-center justify-center text-xs text-foreground/60 hover:text-foreground transition-transform ${
-                        isExpanded ? "rotate-90" : ""
-                      }`}
-                      aria-label={isExpanded ? "收起" : "展开"}
-                    >
-                      ▶
-                    </button>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{c.title}</div>
-                      <div className="text-[11px] text-foreground/40 mt-0.5">
-                        {formatTime(c.updatedAt)} · {userNodes.length} 个问题
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeConversation(c.id);
-                      }}
-                      className="opacity-0 group-hover:opacity-100 text-foreground/40 hover:text-danger text-xs px-1"
-                      aria-label="删除会话"
-                    >
-                      ×
-                    </button>
-                  </div>
-                  {isExpanded && (
-                    <div className="pb-2 pl-9 pr-3">
-                      {userNodes.length === 0 ? (
-                        <div className="text-[11px] text-foreground/40 py-1">
-                          暂无问题
-                        </div>
-                      ) : (
-                        <div className="relative ml-2 pl-4 border-l-2 border-primary-100 space-y-1">
-                          {userNodes.map((n, i) => (
-                            <button
-                              key={n.id}
-                              type="button"
-                              onClick={() => {
-                                if (c.id !== activeId) selectConversation(c.id);
-                                // 切换会话后立即滚动可能未挂载，延迟一帧再尝试
-                                setTimeout(() => scrollToMessage(n.id), 50);
-                              }}
-                              className="group/node block w-full text-left text-xs text-foreground/80 hover:text-primary-600 hover:bg-primary-50 px-2 py-1.5 rounded transition-colors relative"
-                              title={n.text}
-                            >
-                              <span className="absolute -left-[21px] top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-primary-400 ring-2 ring-white group-hover/node:bg-primary-600 transition-colors" />
-                              <span className="truncate font-medium">
-                                {i + 1}. {n.text.slice(0, 24)}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(false)}
-            className="px-4 py-2 text-xs text-foreground/60 border-t border-border hover:bg-muted"
-          >
-            收起侧栏
-          </button>
-        </div>
+        {sidebarOpen && (
+          <ConversationSidebar
+            conversations={conversations}
+            activeId={activeId}
+            hydrated={hydrated}
+            expandedConvos={expandedConvos}
+            onNewConversation={startNewConversation}
+            onSelectConversation={selectConversation}
+            onRemoveConversation={removeConversation}
+            onToggleExpanded={toggleConvoExpanded}
+            onScrollToMessage={scrollToMessage}
+            onCollapse={() => setSidebarOpen(false)}
+          />
+        )}
       </aside>
 
       {/* 收起状态下展开按钮 */}
@@ -591,83 +414,18 @@ export default function Home() {
             </div>
           )}
 
-          {messages.map((m) => {
-            const text = getMessageText(m);
-            const files = getMessageFiles(m);
-            const exportsForThis = exportsByMessage[m.id] ?? [];
-            const isExportBusy = exportBusy.has(m.id);
-            return (
-              <div
-                key={m.id}
-                ref={(el) => {
-                  if (el) messageRefs.current.set(m.id, el);
-                  else messageRefs.current.delete(m.id);
-                }}
-                className={`flex flex-col ${
-                  m.role === "user" ? "items-end" : "items-start"
-                }`}
-              >
-                <div
-                  className={`flex ${
-                    m.role === "user" ? "justify-end" : "justify-start"
-                  } w-full`}
-                >
-                  {m.role !== "user" && (
-                    <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm mr-2 shrink-0">
-                      🎓
-                    </div>
-                  )}
-
-                  <div
-                    className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed break-words ${
-                      m.role === "user"
-                        ? "bg-primary-600 text-white rounded-br-md"
-                        : "bg-surface text-foreground rounded-bl-md shadow-sm"
-                    }`}
-                  >
-                    {files.length > 0 && (
-                      <div className="mb-2 flex flex-wrap gap-2">
-                        {files.map((f, i) => (
-                          <FilePreview key={i} file={f} fromUser={m.role === "user"} />
-                        ))}
-                      </div>
-                    )}
-                    {text && (
-                      <MarkdownRenderer
-                        content={text}
-                        variant={m.role === "user" ? "user" : "assistant"}
-                      />
-                    )}
-                  </div>
-
-                  {m.role === "user" && (
-                    <div className="w-8 h-8 bg-ink-400 rounded-full flex items-center justify-center text-white text-sm ml-2 shrink-0">
-                      👤
-                    </div>
-                  )}
-                </div>
-
-                {/* AI 回复：AI 生成的导出文件卡片（代码块下载按钮已内置在 MarkdownRenderer 里） */}
-                {m.role === "assistant" && exportsForThis.length > 0 && (
-                  <div className="ml-10 mt-2 flex flex-wrap gap-2">
-                    {exportsForThis.map((f, i) => (
-                      <ExportFileCard key={i} file={f} />
-                    ))}
-                  </div>
-                )}
-
-                {/* AI 回复：导出加载中提示 */}
-                {m.role === "assistant" && isExportBusy && exportsForThis.length === 0 && (
-                  <div className="ml-10 mt-2 text-[11px] text-foreground/40 flex items-center gap-1.5">
-                    <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:0ms]" />
-                    <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:150ms]" />
-                    <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:300ms]" />
-                    <span className="ml-1">正在生成可导出文件…</span>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {messages.map((m) => (
+            <MessageBubble
+              key={m.id}
+              ref={(el) => {
+                if (el) messageRefs.current.set(m.id, el);
+                else messageRefs.current.delete(m.id);
+              }}
+              message={m}
+              exportsForThis={exportsByMessage[m.id] ?? []}
+              isExportBusy={exportBusy.has(m.id)}
+            />
+          ))}
 
           {/* AI 正在输入动画 */}
           {isLoading && messages.at(-1)?.role === "user" && (
@@ -781,112 +539,6 @@ export default function Home() {
           </button>
         </form>
       </main>
-    </div>
-  );
-}
-
-// ===== 文件预览组件 =====
-
-function FilePreview({
-  file,
-  fromUser,
-}: {
-  file: FileUIPart;
-  fromUser: boolean;
-}) {
-  if (isImage(file.mediaType) && file.url) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={file.url}
-        alt={file.filename ?? "图片"}
-        className="max-w-[200px] max-h-[200px] rounded-lg object-cover"
-      />
-    );
-  }
-  return (
-    <a
-      href={file.url || "#"}
-      download={file.filename}
-      className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-xs ${
-        fromUser
-          ? "bg-white/20 text-white"
-          : "bg-muted text-foreground/80 hover:bg-border"
-      }`}
-    >
-      <span className="text-base">📄</span>
-      <span className="max-w-[160px] truncate">{file.filename}</span>
-      {file.url && (
-        <span className="opacity-70 text-[10px]">
-          {formatBytes(estimateDataUrlBytes(file.url))}
-        </span>
-      )}
-    </a>
-  );
-}
-
-function estimateDataUrlBytes(dataUrl: string) {
-  const comma = dataUrl.indexOf(",");
-  if (comma < 0) return 0;
-  const base64 = dataUrl.slice(comma + 1);
-  return Math.floor((base64.length * 3) / 4);
-}
-
-// ===== 导出文件卡片组件 =====
-
-const FORMAT_ICON: Record<ExportFileDescriptor["format"], string> = {
-  code: "💻",
-  markdown: "📝",
-  docx: "📘",
-  pdf: "📕",
-  text: "📄",
-};
-
-const FORMAT_LABEL: Record<ExportFileDescriptor["format"], string> = {
-  code: "代码",
-  markdown: "Markdown",
-  docx: "Word",
-  pdf: "PDF",
-  text: "文本",
-};
-
-function ExportFileCard({ file }: { file: ExportFileDescriptor }) {
-  const [downloading, setDownloading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleDownload = async () => {
-    setDownloading(true);
-    setError(null);
-    try {
-      await downloadExportFile(file);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "下载失败");
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  return (
-    <div className="flex items-center gap-2 bg-surface border border-border rounded-lg px-3 py-2 shadow-sm max-w-[280px]">
-      <span className="text-xl">{FORMAT_ICON[file.format]}</span>
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-foreground truncate" title={file.filename}>
-          {file.filename}
-        </div>
-        <div className="text-[10px] text-foreground/60">
-          {FORMAT_LABEL[file.format]}
-          {file.language ? ` · ${file.language}` : ""}
-        </div>
-        {error && <div className="text-[10px] text-danger mt-0.5">{error}</div>}
-      </div>
-      <button
-        type="button"
-        onClick={handleDownload}
-        disabled={downloading}
-        className="text-[11px] px-2 py-1 bg-primary-50 text-primary-600 hover:bg-primary-100 rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
-      >
-        {downloading ? "下载中…" : "下载"}
-      </button>
     </div>
   );
 }
