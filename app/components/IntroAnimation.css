@@ -1,7 +1,7 @@
 .intro-stage {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
+  position: relative;
+  height: 100vh;
+  width: 100%;
   overflow: hidden;
   background: #0b1220;
 }
@@ -11,32 +11,38 @@
   height: 100%;
 }
 
+/* 向下滚动提示：动画播完后淡入 */
+.scroll-hint {
+  opacity: 0;
+  transform: translateX(-50%) translateY(10px);
+  animation: hint-fade-in .5s ease-out 3.9s forwards;
+}
+@keyframes hint-fade-in {
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 .sky-night, .moon, .star, .meteor, .logo-group { opacity: 0; }
 .blur-bg { filter: blur(2px); }
-.camera { transform-origin: 200px 180px; animation: cameraPush 3s cubic-bezier(.25,.6,.2,1) both; }
+.camera { transform-origin: 200px 180px; animation: cameraPush 1.1s cubic-bezier(.25,.6,.2,1) both; }
 
-.ground-line { stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw .4s ease-out .05s forwards; }
-.buildings-near { transform-box: fill-box; transform-origin: bottom; animation: rise 1.0s cubic-bezier(.2,.8,.2,1) .5s both; }
+.ground-line { stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw .18s ease-out .03s forwards; }
+.buildings-near { transform-box: fill-box; transform-origin: bottom; animation: rise .36s cubic-bezier(.2,.8,.2,1) .18s both; }
 
-.sky-night { animation: fadein 1.0s ease-in-out 1.6s forwards; }
-.sun      { animation: sundown 1.0s ease-in-out 1.6s forwards; }
-.moon     { animation: fadein .8s ease-in-out 1.85s forwards; }
-.star     { animation: twinkle 2s ease-in-out 1.85s infinite, fadein .6s ease-out 1.85s forwards; }
+.night-ambient { opacity: 0; animation: fadein .24s ease-out .78s forwards; }
+.lamp-glow { opacity: 0; animation: lampFadeIn .24s ease-out .78s forwards; }
 
-.night-ambient { opacity: 0; animation: fadein .6s ease-out 2.2s forwards; }
-.lamp-glow { opacity: 0; animation: lampFadeIn .6s ease-out 2.2s forwards; }
+.meteor { animation: shoot .33s ease-in .84s forwards; }
+.meteor.m2 { animation: shoot .33s ease-in .93s forwards; }
 
-.meteor { animation: shoot .9s ease-in 2.5s forwards; }
-.meteor.m2 { animation: shoot .9s ease-in 2.7s forwards; }
-
-.meteor-final { opacity: 0; animation: shootFinal .55s ease-in 3.3s forwards; }
-.logo-group { animation: logoIn .8s cubic-bezier(.2,1.1,.3,1) 3.6s forwards, logoUp .6s ease-out 4.2s forwards; }
-.logo-group .orbit { transform-box: fill-box; transform-origin: center; animation: orbitSpin 6s linear 4.3s infinite; }
-.char { opacity: 0; animation: charIn .5s ease-out forwards; }
-.sky-night { animation: fadein 1.0s ease-in-out 1.6s forwards, fadeout .7s ease-out 4.0s forwards; }
-.moon { animation: fadein .8s ease-in-out 1.85s forwards, fadeout .7s ease-out 4.0s forwards; }
-.star { animation: twinkle 2s ease-in-out 1.85s infinite, fadein .6s ease-out 1.85s forwards, fadeout .7s ease-out 4.0s forwards; }
-.sun { animation: sundown 1.0s ease-in-out 1.6s forwards, sunup .7s ease-out 4.0s forwards; }
+.meteor-final { opacity: 0; animation: shootFinal .21s ease-in 1.08s forwards; }
+.logo-group { animation: logoIn .3s cubic-bezier(.2,1.1,.3,1) 1.2s forwards, logoUp .24s ease-out 1.5s forwards; }
+.logo-group .orbit { transform-box: fill-box; transform-origin: center; animation: orbitSpin 6s linear 1.5s infinite; }
+.char { opacity: 0; animation: charIn .2s ease-out forwards; }
+/* 夜空层：淡入 → 1.38s 后淡出（让位给 Logo 阶段） */
+.sky-night { animation: fadein .36s ease-in-out .54s forwards, fadeout .24s ease-out 1.38s forwards; }
+.sun       { animation: sundown .36s ease-in-out .54s forwards, sunup .24s ease-out 1.38s forwards; }
+.moon      { animation: fadein .3s ease-in-out .66s forwards, fadeout .24s ease-out 1.38s forwards; }
+.star      { animation: twinkle 2s ease-in-out .66s infinite, fadein .24s ease-out .66s forwards, fadeout .24s ease-out 1.38s forwards; }
 
 @keyframes draw { to { stroke-dashoffset: 0; } }
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
@@ -53,9 +59,9 @@
 @keyframes logoIn { from { opacity: 0; transform: translate(35px,-18px) scale(.65); } to { opacity: 1; transform: translate(0,0) scale(1); } }
 @keyframes cameraPush { from { transform: scale(1.1); } to { transform: scale(1); } }
 @keyframes charIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-.bird { animation: birdFly 14s ease-in-out infinite; }
-.bird.b2 { animation-delay: 3.5s; animation-duration: 18s; }
-.bird.b3 { animation-delay: 7s; animation-duration: 16s; }
+.bird { animation: birdFly 10s ease-in-out infinite; }
+.bird.b2 { animation-delay: 2s; animation-duration: 13s; }
+.bird.b3 { animation-delay: 4.5s; animation-duration: 11s; }
 @keyframes birdFly { 0% { transform: translate(0,0); opacity: 0; } 10% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translate(-220px,-25px); opacity: 0; } }
 
 .sun-halo  { transform-box: fill-box; transform-origin: center; animation: haloPulse 3s ease-in-out infinite; }
@@ -69,3 +75,25 @@
 @keyframes silverFall { 0% { transform: translateY(0); opacity: 0; } 20% { opacity: 1; } 100% { transform: translateY(30px); opacity: 0; } }
 .sparkle { transform-box: fill-box; transform-origin: center; animation: sparkleAnim 1.8s ease-in-out infinite; }
 @keyframes sparkleAnim { 0%,100% { transform: scale(0); opacity: 0; } 50% { transform: scale(1); opacity: 1; } }
+
+/* 跳过按钮 */
+.intro-skip {
+  position: absolute;
+  z-index: 10;
+  padding: 6px 16px;
+  font-size: 13px;
+  color: rgba(255,255,255,.7);
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 8px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background .15s, color .15s;
+  font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+}
+.intro-skip:hover {
+  background: rgba(255,255,255,.22);
+  color: #fff;
+}
+.intro-skip--tr { top: 20px; right: 20px; }
+.intro-skip--br { bottom: 20px; right: 20px; }

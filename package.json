@@ -11,6 +11,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^4.0.23",
     "@ai-sdk/react": "^4.0.44",
+    "@types/three": "^0.185.4",
     "ai": "^7.0.41",
     "docx": "^9.7.1",
     "jspdf": "^4.2.1",
@@ -18,7 +19,8 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

@@ -9,17 +9,18 @@
   --color-muted: var(--muted);
   --color-foreground: var(--foreground);
   --color-border: var(--border);
+  /* 品牌主色（inline + var() 支持运行时主题切换） */
+  --color-primary-600: var(--primary-600);
+  --color-primary-500: var(--primary-500);
+  --color-primary-400: var(--primary-400);
+  --color-primary-100: var(--primary-100);
+  --color-primary-50:  var(--primary-50);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
 }
 
-/* ── 品牌色板（蓝白 · 科大蓝） ─────────────────────── */
+/* ── 品牌色板（固定值，不随主题切换） ─────────────── */
 @theme {
-  /* 品牌主色 */
-  --color-primary-600: #0046ad;
-  --color-primary-500: #0a5bd4;
-  --color-primary-400: #3b82f6;
-  --color-primary-100: #dbeafe;
-  --color-primary-50:  #eff6ff;
-
   /* 中性色（蓝调灰） */
   --color-ink-900: #16233a;
   --color-ink-600: #55657a;
@@ -35,15 +36,35 @@
 
 /* ── 语义色（随明暗主题切换） ─────────────────────── */
 :root {
-  --background: #eff6ff;
-  --surface: #ffffff;
-  --muted: #f0f4f9;
-  --foreground: #16233a;
-  --border: #e3eaf3;
+  --background: #e0e0e0;
+  --surface: #e0e0e0;
+  --muted: #e0e0e0;
+  --foreground: #4a4a4a;
+  --border: #d0d0d0;
+  /* 默认主题色：沉静靛蓝（点缀色） */
+  --primary-600: #3e63af;
+  --primary-500: #4a70c0;
+  --primary-400: #5b82c9;
+  --primary-100: #e9eef8;
+  --primary-50:  #f0f3f9;
+  /* 强调色：淡橙（占比 <10%） */
+  --accent: #e68947;
+  --accent-soft: #fdf1e5;
+  /* 新拟态阴影 */
+  --neu-dark: #bebebe;
+  --neu-light: #ffffff;
 }
 
+/* 暗色模式：手动切换优先，否则跟随系统 */
+:root[data-theme="dark"] {
+  --background: #0b1220;
+  --surface: #111a2c;
+  --muted: #1a2537;
+  --foreground: #e6edf7;
+  --border: #1f2b42;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --background: #0b1220;
     --surface: #111a2c;
     --muted: #1a2537;
@@ -54,11 +75,102 @@
 
 /* ── 基础样式 ─────────────────────────────────────── */
 body {
-  background: var(--background);
+  background:
+    radial-gradient(800px 500px at 85% -10%, rgba(62, 99, 175, 0.07) 0%, transparent 60%),
+    radial-gradient(700px 500px at -10% 110%, rgba(230, 137, 71, 0.06) 0%, transparent 55%),
+    var(--background);
   color: var(--foreground);
   font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* ── 新拟态（Neumorphism） ───────────────────────── */
+.neu-raised {
+  box-shadow: 8px 8px 16px var(--neu-dark), -8px -8px 16px var(--neu-light);
+}
+.neu-pressed {
+  box-shadow: inset 6px 6px 12px var(--neu-dark), inset -6px -6px 12px var(--neu-light);
+}
+/* 可点击的新拟态卡片：凸起 + 按住凹陷 */
+.neu-card {
+  box-shadow: 8px 8px 16px var(--neu-dark), -8px -8px 16px var(--neu-light);
+  transition: box-shadow .15s ease, transform .15s ease;
+}
+.neu-card:active {
+  box-shadow: inset 6px 6px 12px var(--neu-dark), inset -6px -6px 12px var(--neu-light);
+  transform: scale(0.98);
+}
+
+/* ── 鼠标水波纹 ──────────────────────────────────── */
+.ripple {
+  position: fixed;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(245, 240, 225, 0.8);
+  pointer-events: none;
+  z-index: 9999;
+  transform: translate(-50%, -50%);
+  animation: ripple-expand 0.7s ease-out forwards;
+}
+@keyframes ripple-expand {
+  0% { width: 0; height: 0; opacity: 0.7; }
+  100% { width: 90px; height: 90px; opacity: 0; }
+}
+
+/* ── 滚动显现 ────────────────────────────────────── */
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity .6s ease, transform .6s ease;
+}
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── 黏土拟态卡片 ────────────────────────────────── */
+.clay-card {
+  backdrop-filter: blur(10px);
+  background-color: rgba(255, 255, 255, 0.8);
+  border-radius: 32px;
+  box-shadow:
+    0px 35px 68px 0px rgba(95, 163, 253, 0.5),
+    inset 0px -6px 16px 0px rgba(95, 163, 253, 0.6),
+    inset 0px 11px 28px 0px rgb(255, 255, 255);
+}
+.clay {
+  border-radius: 18px;
+  box-shadow:
+    0 6px 14px rgba(60, 70, 90, 0.10),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.06),
+    inset 0 2px 5px rgba(255, 255, 255, 0.7);
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+.clay:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 10px 22px rgba(60, 70, 90, 0.15),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.07),
+    inset 0 2px 5px rgba(255, 255, 255, 0.8);
+}
+.clay:active {
+  transform: translateY(-1px) scale(0.98);
+}
+
+/* ── 微交互动效 ──────────────────────────────────── */
+@keyframes message-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.message-in {
+  animation: message-in .3s ease-out both;
+}
+@keyframes thinking-dot {
+  0%, 100% { opacity: .25; transform: translateY(0); }
+  50%      { opacity: 1;   transform: translateY(-3px); }
+}
+.thinking-dot { animation: thinking-dot 1.2s ease-in-out infinite; }
 
 /* ── Logo 动效 ────────────────────────────────────── */
 @keyframes orbit-spin { to { transform: rotate(360deg); } }
@@ -72,3 +184,9 @@ body {
 .page-flip-r { transform-box: fill-box; transform-origin: 0% 50%;   animation: page-flip-r 3.2s ease-in-out infinite; }
 .logo-float  { animation: logo-float 2.6s ease-in-out infinite; }
 .logo-wave   { animation: logo-wave 3.4s ease-in-out infinite; }
+
+/* ── 主题色覆盖（JS 动态切换） ──────────────────── */
+:root[data-theme-color="blue"]   { --primary-600:#3e63af; --primary-500:#4a70c0; --primary-400:#5b82c9; --primary-100:#e9eef8; --primary-50:#f0f3f9; }
+:root[data-theme-color="purple"] { --primary-600:#7c3aed; --primary-500:#8b5cf6; --primary-400:#a78bfa; --primary-100:#ede9fe; --primary-50:#f5f3ff; }
+:root[data-theme-color="teal"]   { --primary-600:#0d9488; --primary-500:#14b8a6; --primary-400:#2dd4bf; --primary-100:#ccfbf1; --primary-50:#f0fdfa; }
+:root[data-theme-color="rose"]   { --primary-600:#e11d48; --primary-500:#f43f5e; --primary-400:#fb7185; --primary-100:#ffe4e6; --primary-50:#fff1f2; }

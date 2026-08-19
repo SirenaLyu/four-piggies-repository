@@ -9,7 +9,15 @@ import {
 } from "./lib/export";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
 import { Logo } from "./components/Logo";
-import { IntroAnimation } from "./components/IntroAnimation";
+import { LandingPage } from "./components/LandingPage";
+
+// ===== 主题色预设 =====
+const THEME_COLORS = [
+  { key: "blue",   label: "科大蓝", color: "#0046ad" },
+  { key: "purple", label: "紫罗兰", color: "#7c3aed" },
+  { key: "teal",   label: "青碧",   color: "#0d9488" },
+  { key: "rose",   label: "玫瑰红", color: "#e11d48" },
+] as const;
 
 // ===== 本地会话持久化 =====
 
@@ -21,6 +29,16 @@ type ConversationSummary = {
 };
 
 const STORAGE_KEY = "campus-ai-conversations";
+
+// 空状态建议问题（含卡片柔和色）
+const SUGGESTIONS = [
+  { text: "食堂有哪些？", color: "#fdf0e3" },
+  { text: "课程怎么选？", color: "#e8f0fb" },
+  { text: "图书馆开放时间？", color: "#e8f5ec" },
+  { text: "社团活动怎么加入？", color: "#f0edfb" },
+  { text: "自习室在哪？", color: "#fdf6e3" },
+  { text: "教学日历", color: "#fdeef0" },
+];
 
 function loadConversations(): ConversationSummary[] {
   if (typeof window === "undefined") return [];
@@ -127,8 +145,8 @@ function formatTime(ts: number) {
 
 export default function Home() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [showIntro, setShowIntro] = useState(true);
-  const handleIntroFinish = useCallback(() => setShowIntro(false), []);
+  const [showLanding, setShowLanding] = useState(true);
+  const handleEnter = useCallback(() => setShowLanding(false), []);
   const [activeId, setActiveId] = useState<string>(() => generateChatId());
   const [hydrated, setHydrated] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<FileUIPart[]>([]);
@@ -138,6 +156,10 @@ export default function Home() {
     Record<string, ExportFileDescriptor[]>
   >({});
   const [exportBusy, setExportBusy] = useState<Set<string>>(new Set());
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [skipIntro, setSkipIntro] = useState(false);
+  const [darkMode, setDarkMode] = useState<"auto" | "light" | "dark">("auto");
+  const [themeColor, setThemeColor] = useState("blue");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -155,6 +177,30 @@ export default function Home() {
     setConversations(loadConversations());
     setHydrated(true);
   }, []);
+
+  // 读取设置偏好
+  useEffect(() => {
+    const s = localStorage.getItem("campus-skip-intro");
+    if (s === "true") setSkipIntro(true);
+    const d = (localStorage.getItem("campus-dark-mode") || "auto") as "auto" | "light" | "dark";
+    setDarkMode(d);
+    const c = localStorage.getItem("campus-theme-color") || "blue";
+    setThemeColor(c);
+  }, []);
+
+  // 持久化设置
+  useEffect(() => {
+    localStorage.setItem("campus-skip-intro", String(skipIntro));
+  }, [skipIntro]);
+  useEffect(() => {
+    localStorage.setItem("campus-dark-mode", darkMode);
+    document.documentElement.setAttribute("data-theme", darkMode === "auto" ? "" : darkMode);
+    if (darkMode === "auto") document.documentElement.removeAttribute("data-theme");
+  }, [darkMode]);
+  useEffect(() => {
+    localStorage.setItem("campus-theme-color", themeColor);
+    document.documentElement.setAttribute("data-theme-color", themeColor);
+  }, [themeColor]);
 
   // 同步 ref，避免 onFinish 闭包陈旧
   useEffect(() => {
@@ -412,12 +458,18 @@ export default function Home() {
     setPendingFiles([]);
   };
 
+  const handleSuggestion = (text: string) => {
+    if (isLoading) return;
+    sendMessage({ text });
+    sentConvoIdRef.current = activeId;
+  };
+
   const [input, setInput] = useState("");
 
   // ===== 渲染 =====
 
-  if (showIntro) {
-    return <IntroAnimation onFinish={handleIntroFinish} />;
+  if (showLanding) {
+    return <LandingPage onEnter={handleEnter} />;
   }
 
   return (
@@ -426,7 +478,7 @@ export default function Home() {
       <aside
         className={`${
           sidebarOpen ? "w-72" : "w-0"
-        } shrink-0 transition-all duration-200 overflow-hidden bg-surface border-r border-border flex flex-col`}
+        } shrink-0 transition-all duration-200 overflow-hidden bg-surface neu-raised flex flex-col`}
       >
         <div className="w-72 h-full flex flex-col">
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
@@ -434,7 +486,7 @@ export default function Home() {
             <button
               type="button"
               onClick={startNewConversation}
-              className="text-xs px-2 py-1 rounded-md bg-primary-50 text-primary-600 hover:bg-primary-100 transition-colors"
+              className="text-xs px-3 py-1.5 rounded-lg neu-card text-primary-600 hover:text-primary-500 transition-all"
             >
               + 新对话
             </button>
@@ -559,46 +611,61 @@ export default function Home() {
       {/* 主聊天区 */}
       <main className="flex-1 flex flex-col min-w-0">
         {/* 顶部导航栏 */}
-        <header className="bg-primary-600 text-white px-4 py-3 shadow-md flex items-center gap-3 shrink-0">
-          <div className="w-9 h-9 bg-white/20 rounded-full flex items-center justify-center">
+        <header className="neu-raised bg-surface mx-3 mt-3 px-4 py-3 flex items-center gap-3 shrink-0 rounded-2xl">
+          <div className="w-9 h-9 bg-primary-600 rounded-full flex items-center justify-center">
             <Logo size={32} color="#FFFFFF" accent="#8FC0FF" />
           </div>
           <div>
-            <h1 className="font-semibold text-sm">校园AI助手</h1>
-            <p className="text-xs text-primary-100">在线 · 随时为你解答</p>
+            <h1 className="font-semibold text-sm text-foreground">科大精灵</h1>
+            <p className="text-xs text-foreground/60">在线 · 随时为你解答</p>
           </div>
-          <button
-            type="button"
-            onClick={handleManualExport}
-            disabled={messages.length === 0 || isLoading}
-            className="ml-auto text-xs px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
-            title="导出当前对话"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleManualExport}
+              disabled={messages.length === 0 || isLoading}
+              className="text-xs px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+              title="导出当前对话"
             >
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-            导出对话
-          </button>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              导出
+            </button>
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition-colors"
+              title="设置"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+          </div>
         </header>
 
         {/* 消息列表 */}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
           {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-foreground/40 select-none">
-              <Logo size={64} className="mb-3" />
-              <p className="text-sm font-medium">你好！我是校园AI助手</p>
-              <p className="text-xs mt-1">有什么关于学校的问题都可以问我~</p>
+            <div className="flex flex-col items-center justify-center h-full select-none">
+              <Logo size={64} className="mb-4" />
+              <h2 className="text-xl font-semibold text-foreground">你好！我是科大精灵</h2>
+              <p className="text-sm text-foreground/60 mt-2">有什么关于学校的问题都可以问我</p>
+              <div className="columns-2 gap-3 mt-8 w-[430px] max-w-full">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s.text}
+                    onClick={() => handleSuggestion(s.text)}
+                    className="neu-card w-full mb-3 px-5 py-4 text-sm font-medium text-foreground/85 text-left break-words rounded-2xl"
+                  >
+                    {s.text}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
@@ -614,7 +681,7 @@ export default function Home() {
                   if (el) messageRefs.current.set(m.id, el);
                   else messageRefs.current.delete(m.id);
                 }}
-                className={`flex flex-col ${
+                className={`flex flex-col message-in ${
                   m.role === "user" ? "items-end" : "items-start"
                 }`}
               >
@@ -625,7 +692,7 @@ export default function Home() {
                 >
                   {m.role !== "user" && (
                     <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm mr-2 shrink-0">
-                      🎓
+                      <Logo size={20} color="#FFFFFF" accent="#8FC0FF" />
                     </div>
                   )}
 
@@ -633,7 +700,7 @@ export default function Home() {
                     className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed break-words ${
                       m.role === "user"
                         ? "bg-primary-600 text-white rounded-br-md"
-                        : "bg-surface text-foreground rounded-bl-md shadow-sm"
+                        : "neu-raised bg-surface text-foreground rounded-bl-md"
                     }`}
                   >
                     {files.length > 0 && (
@@ -653,7 +720,7 @@ export default function Home() {
 
                   {m.role === "user" && (
                     <div className="w-8 h-8 bg-ink-400 rounded-full flex items-center justify-center text-white text-sm ml-2 shrink-0">
-                      👤
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                     </div>
                   )}
                 </div>
@@ -682,16 +749,17 @@ export default function Home() {
 
           {/* AI 正在输入动画 */}
           {isLoading && messages.at(-1)?.role === "user" && (
-            <div className="flex justify-start">
+            <div className="flex justify-start message-in">
               <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm mr-2 shrink-0">
-                🎓
+                <Logo size={20} color="#FFFFFF" accent="#8FC0FF" />
               </div>
-              <div className="bg-surface px-4 py-3 rounded-2xl rounded-bl-md shadow-sm">
-                <div className="flex gap-1.5">
-                  <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:0ms]" />
-                  <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:150ms]" />
-                  <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:300ms]" />
+              <div className="bg-surface px-4 py-3 rounded-2xl rounded-bl-md shadow-sm flex items-center gap-2">
+                <div className="flex gap-1 mr-1">
+                  <span className="w-1.5 h-1.5 bg-primary-400 rounded-full thinking-dot [animation-delay:0ms]" />
+                  <span className="w-1.5 h-1.5 bg-primary-400 rounded-full thinking-dot [animation-delay:150ms]" />
+                  <span className="w-1.5 h-1.5 bg-primary-400 rounded-full thinking-dot [animation-delay:300ms]" />
                 </div>
+                <span className="text-xs text-foreground/60">正在检索校园知识库…</span>
               </div>
             </div>
           )}
@@ -768,13 +836,13 @@ export default function Home() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="输入你的问题..."
-            className="flex-1 bg-muted text-foreground placeholder:text-foreground/60 rounded-full px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary-400 focus:bg-surface transition-all"
+            className="flex-1 neu-pressed bg-surface text-foreground placeholder:text-foreground/60 rounded-full px-4 py-2.5 text-sm outline-none transition-all"
             disabled={isLoading}
           />
           <button
             type="submit"
             disabled={isLoading || (!input.trim() && pendingFiles.length === 0)}
-            className="w-10 h-10 bg-primary-600 rounded-full flex items-center justify-center text-white shrink-0 hover:bg-primary-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="w-10 h-10 bg-primary-600 rounded-full flex items-center justify-center text-white shrink-0 hover:bg-primary-500 hover:scale-105 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
           >
             <svg
               width="18"
@@ -792,6 +860,76 @@ export default function Home() {
           </button>
         </form>
       </main>
+
+      {/* 设置抽屉 */}
+      {settingsOpen && (
+        <>
+          <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setSettingsOpen(false)} />
+          <div className="fixed top-0 right-0 h-full w-80 bg-surface border-l border-border z-50 shadow-xl flex flex-col">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-foreground">设置</h3>
+              <button type="button" onClick={() => setSettingsOpen(false)} className="text-foreground/60 hover:text-foreground text-lg leading-none">&times;</button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+              {/* 开场动画 */}
+              <div>
+                <label className="text-xs font-medium text-foreground/70 mb-2 block">开场动画</label>
+                <label className="flex items-center gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={skipIntro}
+                    onChange={(e) => setSkipIntro(e.target.checked)}
+                    className="w-4 h-4 rounded border-border accent-primary-600"
+                  />
+                  <span className="text-sm text-foreground/80">跳过开场动画</span>
+                </label>
+                <p className="text-[11px] text-foreground/40 mt-1 ml-7">开启后下次启动将直接进入主界面</p>
+              </div>
+              {/* 暗色模式 */}
+              <div>
+                <label className="text-xs font-medium text-foreground/70 mb-2 block">外观模式</label>
+                <div className="flex gap-2">
+                  {(["auto", "light", "dark"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setDarkMode(mode)}
+                      className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${
+                        darkMode === mode
+                          ? "bg-primary-50 border-primary-400 text-primary-600"
+                          : "border-border text-foreground/60 hover:bg-muted"
+                      }`}
+                    >
+                      {mode === "auto" ? "跟随系统" : mode === "light" ? "浅色" : "深色"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {/* 主题色 */}
+              <div>
+                <label className="text-xs font-medium text-foreground/70 mb-2 block">主题色</label>
+                <div className="flex gap-3">
+                  {THEME_COLORS.map((t) => (
+                    <button
+                      key={t.key}
+                      type="button"
+                      onClick={() => setThemeColor(t.key)}
+                      className={`w-9 h-9 rounded-full border-2 transition-all ${
+                        themeColor === t.key ? "border-foreground scale-110 shadow-md" : "border-transparent hover:scale-105"
+                      }`}
+                      style={{ backgroundColor: t.color }}
+                      title={t.label}
+                    />
+                  ))}
+                </div>
+                <p className="text-[11px] text-foreground/40 mt-2">
+                  {THEME_COLORS.find((t) => t.key === themeColor)?.label ?? ""}
+                </p>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

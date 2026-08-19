@@ -5,7 +5,8 @@ import "./IntroAnimation.css";
 
 /**
  * 开场动画：白昼平地起校门 → 日夜渐变 → 流星 → Logo → 「科大精灵」
- * 播放约 5.6 秒后调用 onFinish，由父组件切换到主界面。
+ * 播放约 4.7 秒后调用 onFinish，由父组件切换到主界面。
+ * 右上角提供「跳过」按钮，随时可结束动画。
  */
 export function IntroAnimation({ onFinish }: { onFinish: () => void }) {
   const onFinishRef = useRef(onFinish);
@@ -14,7 +15,7 @@ export function IntroAnimation({ onFinish }: { onFinish: () => void }) {
   });
 
   useEffect(() => {
-    const timer = setTimeout(() => onFinishRef.current(), 5600);
+    const timer = setTimeout(() => onFinishRef.current(), 2800);
     return () => clearTimeout(timer);
   }, []);
 
@@ -133,7 +134,7 @@ export function IntroAnimation({ onFinish }: { onFinish: () => void }) {
 
           {/* Logo（最后阶段） */}
           <g className="logo-group">
-            <g transform="translate(200 140)">
+            <g transform="translate(200 120)">
               <g className="orbit">
                 <ellipse cx="0" cy="5" rx="30" ry="13" transform="rotate(-16 0 5)" stroke="#0046AD" strokeWidth="3" strokeLinecap="round" />
                 <circle cx="23" cy="-4" r="2.5" fill="#ffffff" />
@@ -149,15 +150,20 @@ export function IntroAnimation({ onFinish }: { onFinish: () => void }) {
 
           {/* 标题「科大精灵」（逐字浮现） */}
           <g className="title-group">
-            <text className="char" x="149" y="84" textAnchor="middle" fontFamily="华文琥珀, STHupo, sans-serif" fontSize="30" fill="#0046AD" style={{ animationDelay: "4.5s" }}>科</text>
-            <text className="char" x="183" y="84" textAnchor="middle" fontFamily="华文琥珀, STHupo, sans-serif" fontSize="30" fill="#0046AD" style={{ animationDelay: "4.65s" }}>大</text>
-            <text className="char" x="217" y="84" textAnchor="middle" fontFamily="华文琥珀, STHupo, sans-serif" fontSize="30" fill="#0046AD" style={{ animationDelay: "4.8s" }}>精</text>
-            <text className="char" x="251" y="84" textAnchor="middle" fontFamily="华文琥珀, STHupo, sans-serif" fontSize="30" fill="#0046AD" style={{ animationDelay: "4.95s" }}>灵</text>
-            <path className="sparkle" d="M130 53 L131.2 56.2 L135 58 L131.2 59.8 L130 63 L128.8 59.8 L125 58 L128.8 56.2 Z" fill="#ffffff" style={{ animationDelay: "5.1s" }} />
-            <path className="sparkle" d="M270 53 L271.2 56.2 L275 58 L271.2 59.8 L270 63 L268.8 59.8 L265 58 L268.8 56.2 Z" fill="#ffffff" style={{ animationDelay: "5.1s" }} />
+            <text className="char" x="166" y="78" textAnchor="middle" fontFamily="STXingkai, 华文行楷, cursive" fontWeight="300" fontSize="34" fill="#0046AD" style={{ animationDelay: "1.6s" }}>科</text>
+            <text className="char" x="200" y="78" textAnchor="middle" fontFamily="STXingkai, 华文行楷, cursive" fontWeight="300" fontSize="34" fill="#0046AD" style={{ animationDelay: "1.72s" }}>大</text>
+            <text className="char" x="234" y="78" textAnchor="middle" fontFamily="STXingkai, 华文行楷, cursive" fontWeight="300" fontSize="34" fill="#0046AD" style={{ animationDelay: "1.84s" }}>精</text>
+            <text className="char" x="268" y="78" textAnchor="middle" fontFamily="STXingkai, 华文行楷, cursive" fontWeight="300" fontSize="34" fill="#0046AD" style={{ animationDelay: "1.96s" }}>灵</text>
+            <path className="sparkle" d="M130 53 L131.2 56.2 L135 58 L131.2 59.8 L130 63 L128.8 59.8 L125 58 L128.8 56.2 Z" fill="#ffffff" style={{ animationDelay: "2.04s" }} />
+            <path className="sparkle" d="M270 53 L271.2 56.2 L275 58 L271.2 59.8 L270 63 L268.8 59.8 L265 58 L268.8 56.2 Z" fill="#ffffff" style={{ animationDelay: "2.04s" }} />
+            <text className="char" x="200" y="100" textAnchor="middle" fontFamily="system-ui, -apple-system, 'Microsoft YaHei', sans-serif" fontWeight="400" fontSize="11" fill="#0046AD" opacity=".75" style={{ animationDelay: "2.08s" }}>你的校园智能伙伴</text>
           </g>
         </g>
       </svg>
+      {/* 跳过按钮 */}
+      <button className="intro-skip intro-skip--tr" onClick={() => onFinishRef.current()}>
+        跳过
+      </button>
     </div>
   );
 }
