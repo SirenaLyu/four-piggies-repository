@@ -8,7 +8,12 @@
  */
 
 import { useChat } from "@ai-sdk/react";
-import { TextStreamChatTransport, type FileUIPart, type UIMessage } from "ai";
+import {
+  TextStreamChatTransport,
+  lastAssistantMessageIsCompleteWithApprovalResponses,
+  type FileUIPart,
+  type UIMessage,
+} from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IntroAnimation } from "./components/IntroAnimation";
 import { Logo } from "./components/Logo";
@@ -17,6 +22,7 @@ import { MessageBubble } from "./components/chat/MessageBubble";
 import {
   deleteConversationStorage,
   generateChatId,
+  loadAuthorizedDirs,
   loadConversationMessages,
   loadConversations,
   saveConversationMessages,
@@ -24,10 +30,15 @@ import {
   type ConversationSummary,
 } from "./components/chat/conversation-storage";
 import {
+  addAuthorizedDirectory,
+  removeAuthorizedDirectory,
+} from "./components/chat/authorized-directories";
+import {
   fileToDataUrl,
   getMessageText,
   isImage,
 } from "./components/chat/message-utils";
+import { stripPendingApprovals } from "./lib/message-text";
 import type { ExportFileDescriptor } from "./lib/export";
 
 // ===== 类型 =====
@@ -54,6 +65,10 @@ export default function Home() {
   >({});
   const [exportBusy, setExportBusy] = useState<Set<string>>(new Set());
   const [input, setInput] = useState("");
+  const [authorizedDirs, setAuthorizedDirs] = useState<string[]>(() =>
+    typeof window === "undefined" ? [] : loadAuthorizedDirs(),
+  );
+  const [showAddDirectory, setShowAddDirectory] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -62,6 +77,7 @@ export default function Home() {
   // ref 镜像：供 onFinish 等回调读取最新值，避免闭包陈旧
   const conversationsRef = useRef<ConversationSummary[]>([]);
   const activeIdRef = useRef<string>(activeId);
+  const authorizedDirsRef = useRef<string[]>(authorizedDirs);
 
   // ===== 初始化与 ref 同步 =====
 
@@ -79,6 +95,9 @@ export default function Home() {
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
+  useEffect(() => {
+    authorizedDirsRef.current = authorizedDirs;
+  }, [authorizedDirs]);
 
   const initialMessages = useMemo<UIMessage[]>(
     () => (hydrated ? loadConversationMessages(activeId) : []),
@@ -158,10 +177,29 @@ export default function Home() {
 
   // ===== 聊天流 =====
 
-  const { messages, sendMessage, status } = useChat<UIMessage>({
+  // 每次发送前：清理悬空 approval + 注入最新授权目录
+  const transport = useMemo(
+    () =>
+      new TextStreamChatTransport({
+        api: "/api/chat",
+        prepareSendMessagesRequest: ({ messages: msgs, body }) => ({
+          body: {
+            ...body,
+            messages: stripPendingApprovals(msgs),
+            authorizedDirectories: authorizedDirsRef.current,
+          },
+        }),
+      }),
+    [],
+  );
+
+  const { messages, sendMessage, status, addToolApprovalResponse } = useChat<UIMessage>({
     id: activeId,
     messages: initialMessages,
-    transport: new TextStreamChatTransport({ api: "/api/chat" }),
+    transport,
+    // 所有待确认的工具调用都被响应后，自动重发请求让服务端继续执行
+    sendAutomaticallyWhen: ({ messages: msgs }) =>
+      lastAssistantMessageIsCompleteWithApprovalResponses({ messages: msgs }),
     onFinish: ({ messages: finalMessages, isAbort, isError }) => {
       if (isAbort || isError) return;
       const convoId = activeIdRef.current;
@@ -347,6 +385,15 @@ export default function Home() {
             activeId={activeId}
             hydrated={hydrated}
             expandedConvos={expandedConvos}
+            authorizedDirs={authorizedDirs}
+            showAddDirectory={showAddDirectory}
+            onToggleAddDirectory={() => setShowAddDirectory((v) => !v)}
+            onAddDirectory={(dir) => {
+              setAuthorizedDirs(addAuthorizedDirectory(dir));
+            }}
+            onRemoveDirectory={(dir) => {
+              setAuthorizedDirs(removeAuthorizedDirectory(dir));
+            }}
             onNewConversation={startNewConversation}
             onSelectConversation={selectConversation}
             onRemoveConversation={removeConversation}
@@ -424,6 +471,13 @@ export default function Home() {
               message={m}
               exportsForThis={exportsByMessage[m.id] ?? []}
               isExportBusy={exportBusy.has(m.id)}
+              onToolApproval={(approvalId, approved) => {
+                void addToolApprovalResponse({
+                  id: approvalId,
+                  approved,
+                  reason: approved ? "用户在界面确认" : "用户拒绝",
+                });
+              }}
             />
           ))}
 

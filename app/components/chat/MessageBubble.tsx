@@ -12,6 +12,8 @@ import type { UIMessage } from "ai";
 import { MarkdownRenderer } from "../MarkdownRenderer";
 import { FilePreview } from "./FilePreview";
 import { ExportFileCard } from "./ExportFileCard";
+import { ToolApprovalCard } from "./ToolApprovalCard";
+import { getPendingApprovals, summarizeApproval } from "./approval-parts";
 import { getMessageFiles, getMessageText } from "./message-utils";
 import type { ExportFileDescriptor } from "../../lib/export";
 
@@ -19,12 +21,15 @@ export interface MessageBubbleProps {
   message: UIMessage;
   exportsForThis: ExportFileDescriptor[];
   isExportBusy: boolean;
+  /** 用户批准/拒绝工具调用的回调（由父组件提供，调 addToolApprovalResponse） */
+  onToolApproval?: (approvalId: string, approved: boolean) => void;
 }
 
 export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(
-  function MessageBubble({ message: m, exportsForThis, isExportBusy }, ref) {
+  function MessageBubble({ message: m, exportsForThis, isExportBusy, onToolApproval }, ref) {
     const text = getMessageText(m);
     const files = getMessageFiles(m);
+    const pendingApprovals = getPendingApprovals(m);
 
     return (
       <div
@@ -87,6 +92,18 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(
             <span className="ml-1">正在生成可导出文件…</span>
           </div>
         )}
+
+        {/* 危险工具确认卡片（待用户批准/拒绝） */}
+        {m.role === "assistant" &&
+          pendingApprovals.map((a) => (
+            <div key={a.approvalId} className="ml-10 mt-2 w-full flex">
+              <ToolApprovalCard
+                toolName={a.toolName}
+                summary={summarizeApproval(a)}
+                onRespond={(approved) => onToolApproval?.(a.approvalId, approved)}
+              />
+            </div>
+          ))}
       </div>
     );
   },

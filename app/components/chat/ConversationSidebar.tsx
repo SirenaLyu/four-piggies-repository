@@ -10,12 +10,18 @@
 import type { ConversationSummary } from "./conversation-storage";
 import { loadConversationMessages } from "./conversation-storage";
 import { formatTime, getMessageText } from "./message-utils";
+import { DirectoryAuthCard } from "./DirectoryAuthCard";
 
 export interface ConversationSidebarProps {
   conversations: ConversationSummary[];
   activeId: string;
   hydrated: boolean;
   expandedConvos: Set<string>;
+  authorizedDirs: string[];
+  showAddDirectory: boolean;
+  onToggleAddDirectory: () => void;
+  onAddDirectory: (dir: string) => void;
+  onRemoveDirectory: (dir: string) => void;
   onNewConversation: () => void;
   onSelectConversation: (id: string) => void;
   onRemoveConversation: (id: string) => void;
@@ -29,6 +35,11 @@ export function ConversationSidebar({
   activeId,
   hydrated,
   expandedConvos,
+  authorizedDirs,
+  showAddDirectory,
+  onToggleAddDirectory,
+  onAddDirectory,
+  onRemoveDirectory,
   onNewConversation,
   onSelectConversation,
   onRemoveConversation,
@@ -68,6 +79,46 @@ export function ConversationSidebar({
             onScrollToMessage={onScrollToMessage}
           />
         ))}
+      </div>
+
+      {/* 授权目录管理区 */}
+      <div className="px-3 py-2 border-t border-border text-xs">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-foreground/60">授权目录</span>
+          <button
+            type="button"
+            onClick={onToggleAddDirectory}
+            className="text-primary-600 hover:text-primary-500"
+          >
+            {showAddDirectory ? "收起" : "+ 添加"}
+          </button>
+        </div>
+        {showAddDirectory && (
+          <DirectoryAuthCard
+            onAllow={(dir) => {
+              onAddDirectory(dir);
+              onToggleAddDirectory();
+            }}
+            onCancel={onToggleAddDirectory}
+          />
+        )}
+        {authorizedDirs.length === 0 ? (
+          <div className="text-foreground/40 text-[11px]">暂无授权目录</div>
+        ) : (
+          authorizedDirs.map((d) => (
+            <div key={d} className="flex items-center justify-between py-0.5">
+              <span className="truncate font-mono text-[11px]">{d}</span>
+              <button
+                type="button"
+                onClick={() => onRemoveDirectory(d)}
+                className="text-foreground/40 hover:text-danger px-1"
+                aria-label="移除目录"
+              >
+                ×
+              </button>
+            </div>
+          ))
+        )}
       </div>
 
       <button
