@@ -103,6 +103,25 @@ npm run build      # 生产构建
 npm start          # 生产启动
 ```
 
+## 一键启动（Windows 脚本）
+
+项目根目录提供了 3 个脚本，Windows 下双击 `start-assistant.bat` 即可运行，无需手动敲命令。
+
+| 文件 | 作用 |
+|---|---|
+| `start-assistant.bat` | **主入口**，双击这个 |
+| `start-assistant-main.bat` | 实际逻辑（UTF-8 编码，中文不乱码） |
+| `stop-assistant.bat` | 停止服务（会 kill 所有 node.exe，一般直接关窗口更干净） |
+
+`start-assistant.bat` 会自动依次：
+
+1. 检查 Node.js（缺失则提示去 nodejs.org 并退出）
+2. 检查依赖 `node_modules`，缺失时用 npmmirror 源自动 `npm install`
+3. 检查 `.env.local`，缺失时列出需要填写的密钥清单
+4. 启动 dev 服务器并自动打开浏览器 `http://localhost:3000`
+
+> 关闭运行窗口即停止服务。**前提仍是先填好 `.env.local` 的密钥**，否则聊天与检索无法真正运行。
+
 ## 项目结构
 
 ```
