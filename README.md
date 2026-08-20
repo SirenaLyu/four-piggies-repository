@@ -12,6 +12,13 @@
 - **文件上传**：支持图片与常见文档（PDF/Word/TXT/MD/CSV/Excel/PPT），单文件 10MB 上限
 - **品牌视觉**：开场动画 + Logo 品牌系统
 
+### 智能体能力
+
+- **主动澄清**：信息不足时像 Claude 一样主动追问，最多 2 次后给出最佳猜测
+- **文件操作**：`list_dir` / `read_file` 自动执行；`write_file` / `execute_command` 弹确认卡片，用户批准后才执行
+- **代码执行**：助手写脚本到授权目录后运行（Node.js / Python），60 秒超时、输出截断 64KB
+- **目录授权**：侧栏"授权目录"添加/移除，路径锚定防 `../` 逃逸，未授权目录一律拒绝
+
 ## 架构
 
 ```
@@ -110,8 +117,11 @@ app/
 │  ├─ IntroAnimation.tsx/.css     # 开场动画
 │  ├─ Logo.tsx / MarkdownRenderer.tsx
 │  └─ chat/
-│     ├─ ConversationSidebar.tsx  # 历史会话侧栏（列表 + 时间轴）
+│     ├─ ConversationSidebar.tsx  # 历史会话侧栏（列表 + 时间轴 + 授权目录管理）
 │     ├─ MessageBubble.tsx        # 单条消息气泡
+│     ├─ ToolApprovalCard.tsx     # 危险工具确认卡片
+│     ├─ DirectoryAuthCard.tsx    # 目录授权内联表单
+│     ├─ approval-parts.ts        # approval part 查找/摘要工具
 │     ├─ FilePreview.tsx          # 附件预览
 │     ├─ ExportFileCard.tsx       # 导出文件卡片
 │     ├─ conversation-storage.ts  # localStorage 持久化纯函数
@@ -125,6 +135,11 @@ app/
    ├─ services/
    │  ├─ title-generator.ts       # 会话标题生成
    │  └─ export-generator.ts      # 导出文件生成
+   ├─ tools/                      # ★ 智能体工具
+   │  ├─ sandbox.ts               # 路径锚定/授权校验纯函数（含单测）
+   │  ├─ executor.ts              # 写文件/跑命令/列目录执行器
+   │  ├─ fs-tools.ts              # 4 个工具定义（list/read/write/execute）
+   │  └─ agent-prompt.ts          # 澄清指南 + 工具说明 prompt 段
    └─ retrieval/                  # ★ 检索域
       ├─ types.ts                 # 共享类型（RouteResult 等）
       ├─ router.ts                # 编排：embed → 分类 → 三层兜底
