@@ -75,3 +75,26 @@ function makeId() {
 export function generateChatId() {
   return `chat-${makeId()}`;
 }
+
+// ===== 授权目录 =====
+
+const DIRS_KEY = "campus-ai-authorized-dirs";
+
+/** 读取授权目录列表 */
+export function loadAuthorizedDirs(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(DIRS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 保存授权目录列表 */
+export function saveAuthorizedDirs(dirs: string[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(DIRS_KEY, JSON.stringify(dirs));
+}
