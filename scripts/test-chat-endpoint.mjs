@@ -79,6 +79,57 @@ const queries = [
     query: "工作日去高新园区有哪些班次",
     expectKeywords: ["高新", "班"],
   },
+  // ===== 8/23 多步 planning 测试(3+ 步复杂查询) =====
+  // 每条标注期望工具序列;expectKeywords 是最终回答里应当出现的关键词
+  // 目的:验证 LLM 在 stopWhen=isStepCount(5) 下能否正确串行/并行调多工具
+  {
+    name: "多步 1:下周二没课找自习室+附近食堂中餐时间",
+    query: "我下周二没课,想找个自习的地方,顺便问下附近食堂中午几点开饭",
+    expectKeywords: ["图书馆", "食堂"], // 期望调 search_pois/search_library_hours + search_library_hours 或 search_pois 食堂
+    expectedTools: ["search_pois 或 search_library_hours", "search_pois(食堂)"],
+  },
+  {
+    name: "多步 2:开学注册期间图书馆开门吗+怎么坐班车去",
+    query: "开学注册期间图书馆开门吗,我从东区怎么坐班车去西区图书馆",
+    expectKeywords: ["图书馆", "班车"],
+    expectedTools: ["search_calendar", "search_library_hours", "search_shuttle"],
+  },
+  {
+    name: "多步 3:查一门课的替代课+那些替代课的学分",
+    query: "量子力学A 能替代什么课,那些替代课分别是几学分",
+    expectKeywords: ["量子力学", "学分"],
+    expectedTools: ["find_substitute_courses", "search_courses"],
+  },
+  {
+    name: "多步 4:国庆节放假+放假前一天班车最晚几点",
+    query: "2026年国庆节放几天假,放假前一天从东区到高新区最晚一班班车几点",
+    expectKeywords: ["国庆", "班车"],
+    expectedTools: ["get_calendar_events_on_date", "search_shuttle 或 get_shuttle_on_day"],
+  },
+  {
+    name: "多步 5:郭沫若奖学金公示期+期间图书馆开放时间",
+    query: "郭沫若奖学金什么时候公示,公示期间图书馆周末开放吗",
+    expectKeywords: ["郭沫若", "图书馆"],
+    expectedTools: ["search_scholarships", "search_library_hours"],
+  },
+  {
+    name: "多步 6:东区最近通知+有哪些奖学金可申请",
+    query: "教务处最近发了什么通知,目前有哪些奖学金可以申请",
+    expectKeywords: ["通知", "奖学金"],
+    expectedTools: ["search_notices", "search_scholarships"],
+  },
+  {
+    name: "多步 7:周末去高新图书馆+顺便坐班车",
+    query: "周末想去高新区图书馆,顺便坐班车去,该怎么安排",
+    expectKeywords: ["图书馆", "班车"],
+    expectedTools: ["search_library_hours", "get_shuttle_on_day"],
+  },
+  {
+    name: "多步 8:查 AED 位置+最近的食堂",
+    query: "东区有哪些 AED 急救设备,附近有什么食堂可以吃饭",
+    expectKeywords: ["AED", "食堂"],
+    expectedTools: ["search_pois(AED)", "search_pois(食堂)"],
+  },
 ];
 
 let pass = 0;
