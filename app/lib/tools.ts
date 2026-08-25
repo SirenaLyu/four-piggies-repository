@@ -304,7 +304,7 @@ export const searchCoursesTool = tool({
 
 export const findSubstituteCoursesTool = tool({
   description:
-    "查询中科大课程替代关系:某课程能被哪些课替代、能否代替某门课、等效课程、学分互认。当用户问'X 能替代什么课''X 能代替 Y 吗''X 的等效课程''X 替换课'等课程替代问题时调用。input 的 course_text 必须是**被查询的课程名**(不含'替代/代替'等动词)。",
+    "查询中科大课程替代关系:某课程能被哪些课替代、能否代替某门课、等效课程、学分互认。当用户问'X 能替代什么课''X 能代替 Y 吗''X 的等效课程''X 替换课'等课程替代问题时调用。input 的 course_text 必须是**被查询的课程名**(不含'替代/代替'等动词)。返回的 substitutes 列表只含课程名+代码,不含学分学时——若用户还问'那些替代课的学分/学时',需对每门替代课继续调 search_courses 查详情。",
   inputSchema: jsonSchema<{ course_text: string }>({
     type: "object",
     properties: {
@@ -403,11 +403,12 @@ export const getCalendarEventsOnDateTool = tool({
       .order("start_date");
     if (error) return { error: error.message, results: [] };
 
-    // 过滤脏数据:爬虫偶发把纯数字/单字符当 event_title(如 "26"),这类无意义
-    const cleaned = (data ?? []).filter(
-      (e: Record<string, unknown>) =>
-        typeof e.event_title === "string" && e.event_title.trim().length >= 2,
-    );
+    // 过滤脏数据:爬虫偶发把教学周数(纯数字 1-31)当 event_title(如 "26"),这类无意义。
+    // 保留 "*休" "*补周二课" "1 劳动节 *休" "21 新生报到" 等含非数字字符的有效 title。
+    const cleaned = (data ?? []).filter((e: Record<string, unknown>) => {
+      const t = typeof e.event_title === "string" ? e.event_title.trim() : "";
+      return t.length >= 2 && !/^\d+$/.test(t);
+    });
     return {
       query_date: date,
       weekday: new Date(date + "T00:00:00").toLocaleDateString("zh-CN", { weekday: "long" }),
