@@ -13,6 +13,7 @@
  * 用法：npx tsx scripts/crawl-ustc-extra.ts
  *      npx tsx scripts/crawl-ustc-extra.ts --only=calendar
  *      npx tsx scripts/crawl-ustc-extra.ts --only=notices,library
+ *      npx tsx scripts/crawl-ustc-extra.ts --only=notices --notice-pages=10   # 翻页爬历史通知(补考试类)
  *      npx tsx scripts/crawl-ustc-extra.ts --only=scholarships --scholarship-pages=4
  */
 
@@ -276,12 +277,191 @@ async function fetchNotices(): Promise<Notice[]> {
   try {
     const xml = await fetchHtml(url, "https://www.teach.ustc.edu.cn/");
     const notices = parseNoticeRss(xml);
-    console.log(`  ${notices.length} 条通知`);
+    console.log(`  RSS feed: ${notices.length} 条通知`);
     return notices;
   } catch (err) {
-    console.error(`  失败:`, (err as Error).message);
+    console.error(`  RSS 失败:`, (err as Error).message);
     return [];
   }
+}
+
+// ===== 2b. 教务处通知列表页翻页爬取(补历史,RSS 只覆盖最近 20 条) =====
+
+/**
+ * 教务处通知列表页结构(WordPress):
+ *   <li class="post-XXX post type-post ... hentry category-notice-teaching">
+ *     <span class="post"><a href=".../notice/notice-teaching/20425.html">标题</a></span>
+ *     <span class="date"><i ...></i> 2026-07-16</span>
+ *   </li>
+ * 列表页 URL:
+ *   https://www.teach.ustc.edu.cn/notice/notice-teaching         (page 1)
+ *   https://www.teach.ustc.edu.cn/notice/notice-teaching/page/N  (page N>=2)
+ *   同理 notice-info(信息类)
+ *
+ * 列表页只给标题+日期+URL,无 body_preview。后续对每个详情页发一次请求拿正文。
+ */
+
+const NOTICE_LIST_CATEGORIES: Array<{ slug: string; name: string }> = [
+  { slug: "notice-teaching", name: "教学" },
+  { slug: "notice-info", name: "信息" },
+];
+
+/** 从列表页 HTML 提取 (title, url, publish_date) 三元组 */
+function parseNoticeListHtml(html: string): Array<{ title: string; url: string; publish_date: string }> {
+  const items: Array<{ title: string; url: string; publish_date: string }> = [];
+  // 匹配 <li class="post-XXX post type-post ...">...</li>
+  const liRegex = /<li class="post-\d+ post type-post[^"]*">[\s\S]*?<\/li>/g;
+  let m: RegExpExecArray | null;
+  while ((m = liRegex.exec(html)) !== null) {
+    const li = m[0];
+    const aMatch = li.match(/<span class="post"><a href="([^"]+)">([\s\S]*?)<\/a><\/span>/);
+    const dateMatch = li.match(/<span class="date"><i[^>]*><\/i>\s*(\d{4}-\d{2}-\d{2})<\/span>/);
+    if (!aMatch) continue;
+    const title = aMatch[2]
+      .replace(/<[^>]+>/g, "")
+      .replace(/"/g, '"')
+      .replace(/&/g, "&")
+      .replace(/</g, "<")
+      .replace(/>/g, ">")
+      .trim();
+    items.push({
+      title,
+      url: aMatch[1],
+      publish_date: dateMatch?.[1] ?? "",
+    });
+  }
+  return items;
+}
+
+/** 检测列表页是否还有下一页(看页面底部 /page/N+1 链接) */
+function findLastPageNum(html: string): number {
+  const matches = html.match(/\/page\/(\d+)/g) ?? [];
+  let maxPage = 1;
+  for (const m of matches) {
+    const n = parseInt(m.replace(/\D/g, ""));
+    if (n > maxPage) maxPage = n;
+  }
+  return maxPage;
+}
+
+/** 从详情页提取 author + body_preview(剥标签 + 截 800 字,覆盖考试安排/联系人/截止时间) */
+function parseNoticeDetailHtml(html: string): { author: string; body_preview: string } {
+  // author:教务站详情页常见 <span class="arti_publisher">发布者：教务处</span> 或 <meta name="author">
+  const author =
+    html.match(/<span class="arti_publisher">发布者：([^<]+)<\/span>/)?.[1]?.trim() ??
+    html.match(/<meta name="author" content="([^"]+)"/)?.[1]?.trim() ??
+    "";
+  // 正文容器候选:arti_metas / wp_articlecontent / entry-content
+  const bodyMatch =
+    html.match(/<div class='wp_articlecontent'>([\s\S]*?)<\/div>/) ??
+    html.match(/<div class="wp_articlecontent">([\s\S]*?)<\/div>/) ??
+    html.match(/<div class="entry-content">([\s\S]*?)<\/div>/);
+  let body_preview = "";
+  if (bodyMatch) {
+    body_preview = bodyMatch[1]
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/"/g, '"')
+      .replace(/&/g, "&")
+      .replace(/</g, "<")
+      .replace(/>/g, ">")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 800);
+  }
+  return { author, body_preview };
+}
+
+/**
+ * 翻页爬教务处通知列表 + 详情。
+ * @param maxPagesPerCategory 每个类目最多翻几页(默认 5,用 --notice-pages 覆盖)
+ */
+async function fetchNoticesFromListPages(maxPagesPerCategory: number): Promise<Notice[]> {
+  console.log(`\n[2b/5] 翻页爬教务处通知列表(每类目最多 ${maxPagesPerCategory} 页)`);
+  const all: Notice[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const cat of NOTICE_LIST_CATEGORIES) {
+    console.log(`  · ${cat.name} (/${cat.slug}/)`);
+    let firstPageMaxPages = 1;
+    try {
+      const firstHtml = await fetchHtml(
+        `https://www.teach.ustc.edu.cn/notice/${cat.slug}`,
+        "https://www.teach.ustc.edu.cn/",
+      );
+      firstPageMaxPages = findLastPageNum(firstHtml);
+      const items = parseNoticeListHtml(firstHtml);
+      for (const it of items) {
+        if (seenUrls.has(it.url)) continue;
+        seenUrls.add(it.url);
+        all.push({
+          title: it.title,
+          url: it.url,
+          publish_date: it.publish_date,
+          author: "",
+          category: cat.name,
+          body_preview: "",
+        });
+      }
+      console.log(`    p1: ${items.length} 条(全站最大页数 ${firstPageMaxPages})`);
+    } catch (err) {
+      console.error(`    p1 失败:`, (err as Error).message);
+      continue;
+    }
+    await sleep(200);
+
+    const pages = Math.min(maxPagesPerCategory, firstPageMaxPages);
+    for (let p = 2; p <= pages; p++) {
+      const listUrl = `https://www.teach.ustc.edu.cn/notice/${cat.slug}/page/${p}`;
+      try {
+        const html = await fetchHtml(listUrl, "https://www.teach.ustc.edu.cn/");
+        const items = parseNoticeListHtml(html);
+        if (items.length === 0) {
+          console.log(`    p${p}: 0 条,停止本类目`);
+          break;
+        }
+        let newCount = 0;
+        for (const it of items) {
+          if (seenUrls.has(it.url)) continue;
+          seenUrls.add(it.url);
+          all.push({
+            title: it.title,
+            url: it.url,
+            publish_date: it.publish_date,
+            author: "",
+            category: cat.name,
+            body_preview: "",
+          });
+          newCount++;
+        }
+        console.log(`    p${p}: ${items.length} 条(${newCount} 新)`);
+      } catch (err) {
+        console.error(`    p${p} 失败:`, (err as Error).message);
+        break;
+      }
+      await sleep(200);
+    }
+  }
+
+  console.log(`  列表汇总:${all.length} 条(去重后),开始抓详情...`);
+
+  // 抓详情(author + body_preview)
+  let done = 0;
+  for (const row of all) {
+    try {
+      const html = await fetchHtml(row.url, "https://www.teach.ustc.edu.cn/");
+      const { author, body_preview } = parseNoticeDetailHtml(html);
+      row.author = author;
+      row.body_preview = body_preview;
+    } catch (err) {
+      console.error(`    详情失败 ${row.url}:`, (err as Error).message);
+    }
+    done++;
+    if (done % 25 === 0) console.log(`    进度 ${done}/${all.length}`);
+    await sleep(150);
+  }
+
+  return all;
 }
 
 // ===== 3. 图书馆开放时间 =====
@@ -635,6 +815,10 @@ async function main() {
   const scholarPagesArg = process.argv.find((a) => a.startsWith("--scholarship-pages="));
   const scholarshipPages = scholarPagesArg ? parseInt(scholarPagesArg.slice(20)) || 3 : 3;
 
+  // 解析 --notice-pages 参数(notice-teaching/notice-info 每类目翻几页,默认 0=只用 RSS)
+  const noticePagesArg = process.argv.find((a) => a.startsWith("--notice-pages="));
+  const noticePages = noticePagesArg ? parseInt(noticePagesArg.slice(15)) || 0 : 0;
+
   if (shouldRun("calendar")) {
     const rows = await fetchCalendar();
     await writeJsonAndCsv("calendar", rows, [
@@ -648,7 +832,26 @@ async function main() {
   }
 
   if (shouldRun("notices")) {
-    const rows = await fetchNotices();
+    const rssRows = await fetchNotices();
+    let rows = rssRows;
+    if (noticePages > 0) {
+      const listRows = await fetchNoticesFromListPages(noticePages);
+      // 合并去重(URL 为 key,RSS 已有 body_preview 优先,列表页补 body_preview)
+      const byUrl = new Map<string, Notice>();
+      for (const r of rssRows) byUrl.set(r.url, r);
+      for (const r of listRows) {
+        const existing = byUrl.get(r.url);
+        if (existing) {
+          // RSS 已有,但如果 body_preview 空,用列表页详情补
+          if (!existing.body_preview && r.body_preview) existing.body_preview = r.body_preview;
+          if (!existing.author && r.author) existing.author = r.author;
+        } else {
+          byUrl.set(r.url, r);
+        }
+      }
+      rows = Array.from(byUrl.values());
+      console.log(`  合并去重后:${rows.length} 条(RSS ${rssRows.length} + 列表页新增 ${rows.length - rssRows.length})`);
+    }
     await writeJsonAndCsv("notices", rows, ["title", "url", "publish_date", "author", "category", "body_preview"]);
   }
 
