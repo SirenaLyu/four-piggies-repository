@@ -260,6 +260,38 @@ function applyKeywordOverride(
     return { primary: "poi", secondary: null };
   }
 
+  // 规则 E:校庆 + 补课 → calendar
+  // 8/25 修复 "校庆那天要补课吗" → calendar(原 fallback,embedding calendar=0.465 弱信号)
+  // 反例:"校庆那一天放假吗" 无"补课",不触发,保持 calendar(embedding 已命中)
+  if (/校庆.*补课|补课.*校庆/.test(query)) {
+    return { primary: "calendar", secondary: null };
+  }
+
+  // 规则 F:毕业论文 + 结题/选题/答辩/存档 → notices
+  // 8/25 修复 "毕业论文结题怎么办理" → notices(原 fallback,embedding notices=0.438 弱信号)
+  // 已通过 case "毕业论文选题怎么报" 命中 → 仍 notices,不改变结果
+  if (/毕业论文.*(结题|选题|答辩|存档)/.test(query)) {
+    return { primary: "notices", secondary: null };
+  }
+
+  // 规则 G:英才班 + 选拔 → notices
+  // 8/25 修复 "英才班选拔怎么报名" → notices(原 scholarships,embedding scholarships=0.426 略高于 notices=0.421)
+  if (/英才班.*选拔|选拔.*英才班/.test(query)) {
+    return { primary: "notices", secondary: null };
+  }
+
+  // 规则 H:教材 + 申报 → notices
+  // 8/25 修复 "教材申报截止时间" → notices(原 fallback,embedding calendar=0.456 选错)
+  if (/教材.*申报|申报.*教材/.test(query)) {
+    return { primary: "notices", secondary: null };
+  }
+
+  // 规则 I:专业分流 / 中期分流 → notices
+  // 8/25 修复 "专业分流什么时候开始" → notices(原 fallback,embedding shuttle=0.460 选错)
+  if (/(专业|中期)分流/.test(query)) {
+    return { primary: "notices", secondary: null };
+  }
+
   return null;
 }
 
