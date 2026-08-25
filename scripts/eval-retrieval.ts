@@ -474,6 +474,284 @@ const EVAL_CASES: EvalCase[] = [
     expectedKeywords: ["西区", "图书馆", "高新", "班车"],
     note: "8/18 新增:多步组合,期望 library 主 + shuttle 副(实际 tool calling 下 LLM 会调 search_library_hours + search_shuttle)",
   },
+
+  // ===== 8/25 新增 42 条(扩到 102 条,覆盖向量检索+分类器路由弱场景) =====
+  // 设计原则:
+  //   1. 每条 case 的 expectedKeywords 至少有一个能命中数据库里真实存在的条目(用 probe 脚本验证过)
+  //   2. 避开已知数据盲区(考试类通知、campus_documents 空表)
+  //   3. real-time 工具(get_calendar_events_on_date/get_shuttle_on_day)不走向量检索,在 test-chat-endpoint.mjs 端到端评估,不放这里
+  //   4. 跨类多步 case 标 expectedSubsidiary,验证 classifier secondary
+
+  // calendar +6:节假日组合、学期边界、调休补课
+  {
+    query: "清明节放几天假",
+    expectedCategory: "calendar",
+    expectedKeywords: ["清明节", "休"],
+    note: "8/25 新增:具体节假日",
+  },
+  {
+    query: "端午节是哪天放假",
+    expectedCategory: "calendar",
+    expectedKeywords: ["端午节", "休"],
+    note: "8/25 新增:具体节假日",
+  },
+  {
+    query: "劳动节放假安排",
+    expectedCategory: "calendar",
+    expectedKeywords: ["劳动节", "休"],
+    note: "8/25 新增:具体节假日",
+  },
+  {
+    query: "国庆节和中秋节连着放吗",
+    expectedCategory: "calendar",
+    expectedKeywords: ["国庆节", "中秋"],
+    note: "8/25 新增:双节假日聚合",
+  },
+  {
+    query: "元旦放假吗",
+    expectedCategory: "calendar",
+    expectedKeywords: ["元旦", "休"],
+    note: "8/25 新增:具体节假日",
+  },
+  {
+    query: "校庆那天要补课吗",
+    expectedCategory: "calendar",
+    expectedKeywords: ["校庆", "补"],
+    note: "8/25 新增:调休补课(校庆 *补周五课)",
+  },
+
+  // shuttle +6:点对点各方向、主线去程/返程、时段过滤
+  {
+    query: "东区到南区有班车吗",
+    expectedCategory: "shuttle",
+    expectedKeywords: ["东区", "南区"],
+    note: "8/25 新增:点对点东区→南区",
+  },
+  {
+    query: "西区到南区怎么坐车",
+    expectedCategory: "shuttle",
+    expectedKeywords: ["西区", "南区"],
+    note: "8/25 新增:点对点西区→南区",
+  },
+  {
+    query: "南区到西区最早一班几点",
+    expectedCategory: "shuttle",
+    expectedKeywords: ["南区", "西区"],
+    note: "8/25 新增:点对点南区→西区",
+  },
+  {
+    query: "高新园区回东区几点发车",
+    expectedCategory: "shuttle",
+    expectedKeywords: ["高新", "东区", "返程"],
+    note: "8/25 新增:主线2 返程 高新→东",
+  },
+  {
+    query: "主线1 去程经过哪些站",
+    expectedCategory: "shuttle",
+    expectedKeywords: ["主线1", "去程", "东", "西", "高新"],
+    note: "8/25 新增:主线1 去程路线",
+  },
+  {
+    query: "点对点班车有哪些方向",
+    expectedCategory: "shuttle",
+    expectedKeywords: ["点对点", "东区", "西区", "南区"],
+    note: "8/25 新增:点对点全方向聚合",
+  },
+
+  // notices +5:具体通知标题检索、类别过滤、时间范围(避开考试盲区)
+  {
+    query: "毕业论文结题怎么办理",
+    expectedCategory: "notices",
+    expectedKeywords: ["毕业论文", "结题"],
+    note: "8/25 新增:具体通知(2026届本科毕业论文结题)",
+  },
+  {
+    query: "助教岗位什么时候申请",
+    expectedCategory: "notices",
+    expectedKeywords: ["助教", "岗位"],
+    note: "8/25 新增:具体通知(2026秋季助教岗位申请)",
+  },
+  {
+    query: "英才班选拔怎么报名",
+    expectedCategory: "notices",
+    expectedKeywords: ["英才班", "选拔"],
+    note: "8/25 新增:具体通知(2026级科技英才班选拔)",
+  },
+  {
+    query: "教材申报截止时间",
+    expectedCategory: "notices",
+    expectedKeywords: ["教材", "申报"],
+    note: "8/25 新增:具体通知(2026年度优秀教材申报)",
+  },
+  {
+    query: "专业分流什么时候开始",
+    expectedCategory: "notices",
+    expectedKeywords: ["专业", "分流"],
+    note: "8/25 新增:具体通知(全校性专业选择及中期分流)",
+  },
+
+  // library +5:分馆+楼层+服务组合、电话、周末
+  {
+    query: "东区图书馆 3 楼 借阅室开放时间",
+    expectedCategory: "library",
+    expectedKeywords: ["东区", "3楼", "借阅"],
+    note: "8/25 新增:分馆+楼层+服务(社科图书借阅一室/二室)",
+  },
+  {
+    query: "西区图书馆研讨室在哪层",
+    expectedCategory: "library",
+    expectedKeywords: ["西区", "研讨室"],
+    note: "8/25 新增:西区 1-3楼研讨室",
+  },
+  {
+    query: "高新区图书馆 VR 语言学习中心几点开",
+    expectedCategory: "library",
+    expectedKeywords: ["高新区", "VR", "语言"],
+    note: "8/25 新增:高新区 VR 语言学习中心 9:00-21:00",
+  },
+  {
+    query: "图书馆科技查新怎么联系",
+    expectedCategory: "library",
+    expectedKeywords: ["查新", "636"],
+    note: "8/25 新增:东区 6楼中 查收查引/科技查新(电话 636 开头)",
+  },
+  {
+    query: "数学学院图书馆在哪",
+    expectedCategory: "library",
+    expectedKeywords: ["数学学院", "图书馆"],
+    note: "8/25 新增:东区 6楼西 数学学院图书馆",
+  },
+
+  // scholarships +6:具体奖学金名称、公示/申请/助学贷款、勤工助学
+  {
+    query: "国家奖学金候选人名单",
+    expectedCategory: "scholarships",
+    expectedKeywords: ["国家奖学金", "候选"],
+    note: "8/25 新增:国家奖学金公示",
+  },
+  {
+    query: "国家励志奖学金怎么申请",
+    expectedCategory: "scholarships",
+    expectedKeywords: ["国家励志", "奖学金"],
+    note: "8/25 新增:国家励志奖学金",
+  },
+  {
+    query: "宝钢奖学金公示结果",
+    expectedCategory: "scholarships",
+    expectedKeywords: ["宝钢"],
+    note: "8/25 新增:宝钢奖学金",
+  },
+  {
+    query: "唐仲英德育奖学金候选人",
+    expectedCategory: "scholarships",
+    expectedKeywords: ["唐仲英"],
+    note: "8/25 新增:唐仲英德育奖学金",
+  },
+  {
+    query: "助学贷款怎么办理",
+    expectedCategory: "scholarships",
+    expectedKeywords: ["助学贷款"],
+    note: "8/25 新增:助学贷款类目(164 条里有 42 条)",
+  },
+  {
+    query: "新长城自强助学金公示",
+    expectedCategory: "scholarships",
+    expectedKeywords: ["新长城", "自强"],
+    note: "8/25 新增:新长城自强助学金",
+  },
+
+  // poi +6:AED 具体楼宇、食堂具体名称、宿舍、教学院系、报警点
+  {
+    query: "物理楼在哪里",
+    expectedCategory: "poi",
+    expectedKeywords: ["物理楼", "教学科研"],
+    note: "8/25 新增:教学科研类楼宇",
+  },
+  {
+    query: "学生宿舍在哪片",
+    expectedCategory: "poi",
+    expectedKeywords: ["学生宿舍"],
+    note: "8/25 新增:学生宿舍类(42 条)",
+  },
+  {
+    query: "校园报警点在哪",
+    expectedCategory: "poi",
+    expectedKeywords: ["报警点"],
+    note: "8/25 新增:报警点类(9 条)",
+  },
+  {
+    query: "东区有哪些出入口",
+    expectedCategory: "poi",
+    expectedKeywords: ["出入口", "东校区"],
+    note: "8/25 新增:出入口类(35 条)+ 校区过滤",
+  },
+  {
+    query: "风味餐厅在哪",
+    expectedCategory: "poi",
+    expectedKeywords: ["风味餐厅"],
+    note: "8/25 新增:具体食堂名称",
+  },
+  {
+    query: "活动场地有哪些",
+    expectedCategory: "poi",
+    expectedKeywords: ["活动场地"],
+    note: "8/25 新增:活动场地类(11 条)",
+  },
+
+  // courses +5:具体课程名、代码反查、学分查询、替代关系变体
+  {
+    query: "微积分II 学分多少",
+    expectedCategory: "courses",
+    expectedKeywords: ["微积分II", "学分"],
+    note: "8/25 新增:具体课程学分(MATH1012 5 学分)",
+  },
+  {
+    query: "数学分析B1 是几学分",
+    expectedCategory: "courses",
+    expectedKeywords: ["数学分析", "B1"],
+    note: "8/25 新增:具体课程学分(MATH1006 6 学分)",
+  },
+  {
+    query: "课程代码 MATH1011 是什么课",
+    expectedCategory: "courses",
+    expectedKeywords: ["MATH1011", "微积分"],
+    note: "8/25 新增:字母数字混合代码反查",
+  },
+  {
+    query: "力学A 能替代什么课",
+    expectedCategory: "courses",
+    expectedKeywords: ["力学A", "PHYS1001A"],
+    note: "8/25 新增:替代关系变体(力学A→力学A(L)等)",
+  },
+  {
+    query: "热学A 和 热学B 学分差多少",
+    expectedCategory: "courses",
+    expectedKeywords: ["热学A", "热学B"],
+    note: "8/25 新增:同类课程学分对比(热学A 3 学分 vs 热学B 1.5 学分)",
+  },
+
+  // 跨类多步 +3:3+ 工具组合
+  {
+    query: "开学注册日图书馆开门吗,怎么坐班车去西区",
+    expectedCategory: "calendar",
+    expectedSubsidiary: "library",
+    expectedKeywords: ["开学注册", "图书馆", "班车"],
+    note: "8/25 新增:三步组合 calendar+library+shuttle",
+  },
+  {
+    query: "郭沫若奖学金公示期间图书馆研讨室开放吗",
+    expectedCategory: "scholarships",
+    expectedSubsidiary: "library",
+    expectedKeywords: ["郭沫若", "图书馆", "研讨室"],
+    note: "8/25 新增:跨类 scholarships+library",
+  },
+  {
+    query: "东区食堂中午营业时间和图书馆自习室开放时间",
+    expectedCategory: "poi",
+    expectedSubsidiary: "library",
+    expectedKeywords: ["食堂", "图书馆"],
+    note: "8/25 新增:跨类 poi+library(食堂+自习室)",
+  },
 ];
 
 // ===== Dify dataset_id 映射(仅 5 个有对应库) =====
