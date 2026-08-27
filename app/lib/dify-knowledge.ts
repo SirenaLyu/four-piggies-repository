@@ -20,6 +20,17 @@ const REQUEST_TIMEOUT_MS = 15_000;
 /** 最终送入大模型的知识库片段数量上限（控制上下文长度、降低首字与总延迟） */
 const MAX_CONTEXT_CHUNKS = 8;
 
+/** 检索结果缓存 TTL（毫秒）：同一问题短时间内直接复用结果，避免反复请求 Dify */
+const RETRIEVAL_CACHE_TTL_MS = 5 * 60 * 1000;
+const retrievalCache = new Map<
+  string,
+  { result: KnowledgeRetrievalResult; ts: number }
+>();
+
+function normalizeQueryKey(query: string): string {
+  return query.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 /** 从知识库检索到的文本片段 */
 export interface KnowledgeChunk {
   /** 来自哪个知识库（Dataset ID） */
@@ -165,6 +176,12 @@ export async function retrieveKnowledgeContext(
     };
   }
 
+  const cacheKey = normalizeQueryKey(query);
+  const cached = retrievalCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < RETRIEVAL_CACHE_TTL_MS) {
+    return cached.result;
+  }
+
   // 并发请求所有知识库
   const retrieveStartedAt = Date.now();
   const settled = await Promise.allSettled(
@@ -196,12 +213,14 @@ export async function retrieveKnowledgeContext(
   if (chunks.length === 0) {
     const reason =
       failedDatasets.length > 0 ? `（${failedDatasets.length} 个知识库请求失败，请检查 Dify 服务状态与 API Key）` : "";
-    return {
+    const result: KnowledgeRetrievalResult = {
       ok: false,
       context: "",
       chunkCount: 0,
       error: `所有知识库均未返回内容${reason}`,
     };
+    retrievalCache.set(cacheKey, { result, ts: Date.now() });
+    return result;
   }
 
   // 按 content 去重，再按相似度分数从高到低排序
@@ -228,5 +247,12 @@ export async function retrieveKnowledgeContext(
       ? `警告：知识库 ${failedDatasets.join("、")} 检索失败，以下结果来自其余知识库`
       : undefined;
 
-  return { ok: true, context, chunkCount: uniqueChunks.length, error };
+  const result: KnowledgeRetrievalResult = {
+    ok: true,
+    context,
+    chunkCount: uniqueChunks.length,
+    error,
+  };
+  retrievalCache.set(cacheKey, { result, ts: Date.now() });
+  return result;
 }
