@@ -17,6 +17,9 @@
 /** 单次检索请求的超时时间（毫秒） */
 const REQUEST_TIMEOUT_MS = 15_000;
 
+/** 最终送入大模型的知识库片段数量上限（控制上下文长度、降低首字与总延迟） */
+const MAX_CONTEXT_CHUNKS = 8;
+
 /** 从知识库检索到的文本片段 */
 export interface KnowledgeChunk {
   /** 来自哪个知识库（Dataset ID） */
@@ -209,7 +212,8 @@ export async function retrieveKnowledgeContext(
       seen.add(chunk.content);
       return true;
     })
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_CONTEXT_CHUNKS);
 
   // 拼接为送入大模型的上下文：带序号与相似度标注，便于模型筛选引用
   const context = uniqueChunks
