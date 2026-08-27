@@ -75,6 +75,20 @@ four-piggies-repository/
 
 ## 6. 安装与运行
 
+### 6.1 一键启动（Windows）
+
+Windows 用户**直接双击 `start.bat`** 即可，脚本会自动完成以下步骤：
+
+1. 检查 Node.js 是否已安装（缺失则提示安装 Node.js 20+）。
+2. 检查 npm 是否可用。
+3. 首次运行时自动执行 `npm install` 安装依赖（已安装则跳过）。
+4. 检查 `.env.local` 是否存在；缺失时自动从 `.env.local.example` 复制一份，并提示填写 API Key。
+5. 启动开发服务器 `npm run dev`，并在几秒后自动打开浏览器访问 <http://localhost:3000>。
+
+> 若 3000 端口被占用，Next.js 会自动改用 3001，按终端提示访问对应地址即可；按 `Ctrl+C` 停止服务器。
+
+### 6.2 手动启动
+
 ```bash
 # 1. 安装依赖（首次）
 npm install
@@ -83,7 +97,6 @@ npm install
 
 # 3. 启动开发服务器
 npm run dev
-# 或 Windows 下双击 start.bat
 ```
 
 访问 <http://localhost:3000>。
