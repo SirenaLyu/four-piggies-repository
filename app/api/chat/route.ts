@@ -1,11 +1,13 @@
 import {
   convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
   stepCountIs,
   streamText,
   tool,
 } from "ai";
 import { z } from "zod";
-import { chatClient, CHAT_MODEL } from "../../lib/ai-clients";
+import { chatModel } from "../../lib/ai-clients";
 import {
   getDifyKnowledgeConfig,
   retrieveKnowledgeContext,
@@ -278,6 +280,53 @@ const SYSTEM_PROMPT = `你是中国科学技术大学智能校园助手，名字
 // API 路由
 // ============================================================================
 
+/** 单轮问答结果缓存 TTL（毫秒） */
+const ANSWER_CACHE_TTL_MS = 3 * 60 * 1000;
+const answerCache = new Map<string, { text: string; ts: number }>();
+
+function normalizeQueryKey(query: string): string {
+  return query.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** 从消息列表中提取最后一条用户消息的纯文本 */
+function extractLastUserText(messages: unknown): string {
+  if (!Array.isArray(messages)) return "";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i] as {
+      role?: string;
+      parts?: Array<{ type?: string; text?: string }>;
+      content?: unknown;
+    };
+    if (m?.role !== "user") continue;
+    if (Array.isArray(m.parts)) {
+      return m.parts
+        .filter((p) => p.type === "text")
+        .map((p) => p.text ?? "")
+        .join("");
+    }
+    if (typeof m.content === "string") return m.content;
+  }
+  return "";
+}
+
+/** 把一段缓存文本包装成 UI message stream 流式响应 */
+function cachedUIMessageResponse(text: string): Response {
+  const stream = createUIMessageStream({
+    execute: ({ writer }) => {
+      const w = writer as unknown as { write: (part: unknown) => void };
+      const id = "0";
+      w.write({ type: "start" });
+      w.write({ type: "start-step" });
+      w.write({ type: "text-start", id });
+      w.write({ type: "text-delta", id, delta: text });
+      w.write({ type: "text-end", id });
+      w.write({ type: "finish-step" });
+      w.write({ type: "finish", finishReason: "stop" });
+    },
+  });
+  return createUIMessageStreamResponse({ stream });
+}
+
 export async function POST(req: Request) {
   // 全链路耗时打点：请求进入 → 首块文本 → 各 step → 流结束
   const requestStart = Date.now();
@@ -290,11 +339,26 @@ export async function POST(req: Request) {
     : [];
   setAllowedDirectories(authorizedDirs);
 
+  // 单轮问答的结果缓存：同一问题短时间内直接复用上一次回答
+  const lastUserText = extractLastUserText(rawMessages);
+  const isSingleTurn =
+    Array.isArray(rawMessages) &&
+    rawMessages.filter((m) => (m as { role?: string }).role === "user").length === 1;
+  const cacheKey =
+    isSingleTurn && lastUserText ? normalizeQueryKey(lastUserText) : null;
+  if (cacheKey) {
+    const cached = answerCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < ANSWER_CACHE_TTL_MS) {
+      console.log(`[chat] 命中回答缓存，直接返回`);
+      return cachedUIMessageResponse(cached.text);
+    }
+  }
+
   // 预处理：移除模型不支持的文件类型
   const messages = sanitizeMessagesForModel(rawMessages);
 
   const result = streamText({
-    model: chatClient.chat(CHAT_MODEL),
+    model: chatModel,
     system: SYSTEM_PROMPT + buildAgentPromptSections(),
     messages: await convertToModelMessages(
       messages as Parameters<typeof convertToModelMessages>[0],
@@ -331,6 +395,13 @@ export async function POST(req: Request) {
 
   console.log(`[chat] streamText 已创建，耗时 ${Date.now() - requestStart}ms，开始等待模型输出`);
 
+  // 完成后缓存本次回答文本（供下一次相同问题直接命中）
+  void result.text.then((text) => {
+    if (cacheKey && text && text.trim()) {
+      answerCache.set(cacheKey, { text, ts: Date.now() });
+    }
+  });
+
   // 用 UI message stream 返回：除了文本，还要把工具调用/审批请求原样传给前端
-  return result.toUIMessageStreamResponse();
+  return result.toUIMessageStreamResponse({ sendReasoning: false });
 }
