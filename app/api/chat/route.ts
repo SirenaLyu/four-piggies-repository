@@ -1,6 +1,5 @@
 import {
   convertToModelMessages,
-  createTextStreamResponse,
   stepCountIs,
   streamText,
   tool,
@@ -11,6 +10,8 @@ import {
   getDifyKnowledgeConfig,
   retrieveKnowledgeContext,
 } from "../../lib/dify-knowledge";
+import { FS_TOOLS, setAllowedDirectories } from "../../lib/tools/fs-tools";
+import { buildAgentPromptSections } from "../../lib/tools/agent-prompt";
 
 // ============================================================================
 // 辅助函数
@@ -286,21 +287,38 @@ export async function POST(req: Request) {
   const body = await req.json();
   const rawMessages = body.messages ?? [];
 
+  // 授权目录随请求传入（前端 localStorage），注入文件工具模块
+  const authorizedDirs = Array.isArray(body.authorizedDirectories)
+    ? (body.authorizedDirectories as string[])
+    : [];
+  setAllowedDirectories(authorizedDirs);
+
   // 预处理：移除模型不支持的文件类型
   const messages = sanitizeMessagesForModel(rawMessages);
 
   const result = streamText({
     model: chatClient.chat(CHAT_MODEL),
-    system: SYSTEM_PROMPT,
+    system: SYSTEM_PROMPT + buildAgentPromptSections(),
     messages: await convertToModelMessages(
       messages as Parameters<typeof convertToModelMessages>[0],
     ),
     tools: {
       query_knowledge_base: queryKnowledgeBaseTool,
       web_search: webSearchTool,
+      ...FS_TOOLS,
     },
     // 允许多轮工具调用：模型可以多次调用工具，综合结果后回答
     stopWhen: stepCountIs(5),
+    // 文件工具审批：危险操作需用户确认，只读操作自动执行
+    toolApproval: {
+      write_file: "user-approval",
+      execute_command: "user-approval",
+      list_dir: "approved",
+      read_file: "approved",
+    },
+    // 签名密钥：绑定 approval 请求与响应，防伪造（本地部署随机值即可）
+    experimental_toolApprovalSecret:
+      process.env.TOOL_APPROVAL_SECRET ?? "campus-ai-local-secret",
     // 每个 step（一轮模型调用/工具调用）结束时打印耗时与工具名
     onStepFinish: ({ stepNumber, toolCalls, text, usage, performance, finishReason }) => {
       console.log(
@@ -316,24 +334,6 @@ export async function POST(req: Request) {
 
   console.log(`[chat] streamText 已创建，耗时 ${Date.now() - requestStart}ms，开始等待模型输出`);
 
-  // 包装文本流：记录首个文本块到达时间（即用户看到第一个字的时间）与流结束时间
-  let firstChunkLogged = false;
-  const instrumentedStream = result.textStream.pipeThrough(
-    new TransformStream<string, string>({
-      transform(chunk, controller) {
-        if (!firstChunkLogged) {
-          firstChunkLogged = true;
-          console.log(`[chat] 首个文本块到达（TTFB）：耗时 ${Date.now() - requestStart}ms`);
-        }
-        controller.enqueue(chunk);
-      },
-      flush() {
-        console.log(`[chat] 流结束，总耗时 ${Date.now() - requestStart}ms`);
-      },
-    }),
-  );
-
-  return createTextStreamResponse({
-    stream: instrumentedStream,
-  });
+  // 用 UI message stream 返回：除了文本，还要把工具调用/审批请求原样传给前端
+  return result.toUIMessageStreamResponse();
 }

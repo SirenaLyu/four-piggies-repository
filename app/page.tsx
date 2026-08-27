@@ -1,7 +1,12 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { TextStreamChatTransport, type UIMessage, type FileUIPart } from "ai";
+import {
+  DefaultChatTransport,
+  lastAssistantMessageIsCompleteWithApprovalResponses,
+  type UIMessage,
+  type FileUIPart,
+} from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   downloadExportFile,
@@ -10,6 +15,18 @@ import {
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
 import { Logo } from "./components/Logo";
 import { LandingPage } from "./components/LandingPage";
+import { ToolApprovalCard } from "./components/chat/ToolApprovalCard";
+import { DirectoryAuthCard } from "./components/chat/DirectoryAuthCard";
+import {
+  getPendingApprovals,
+  stripPendingApprovals,
+  summarizeApproval,
+} from "./components/chat/approval-parts";
+import {
+  addAuthorizedDirectory,
+  loadAuthorizedDirs,
+  removeAuthorizedDirectory,
+} from "./components/chat/authorized-directories";
 
 // ===== 主题色预设 =====
 const THEME_COLORS = [
@@ -160,12 +177,17 @@ export default function Home() {
   const [skipIntro, setSkipIntro] = useState(false);
   const [darkMode, setDarkMode] = useState<"auto" | "light" | "dark">("auto");
   const [themeColor, setThemeColor] = useState("blue");
+  const [authorizedDirs, setAuthorizedDirs] = useState<string[]>(() =>
+    typeof window === "undefined" ? [] : loadAuthorizedDirs(),
+  );
+  const [showAddDirectory, setShowAddDirectory] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const exportInFlightRef = useRef<Set<string>>(new Set());
   const conversationsRef = useRef<ConversationSummary[]>([]);
   const activeIdRef = useRef<string>(activeId);
+  const authorizedDirsRef = useRef<string[]>(authorizedDirs);
   // 记录本次发送所属的会话 ID：防止流式期间用户切换会话后，
   // onFinish 把回复保存/归档到错误的会话下
   const sentConvoIdRef = useRef<string | null>(null);
@@ -209,6 +231,9 @@ export default function Home() {
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
+  useEffect(() => {
+    authorizedDirsRef.current = authorizedDirs;
+  }, [authorizedDirs]);
 
   const initialMessages = useMemo<UIMessage[]>(
     () => (hydrated ? loadConversationMessages(activeId) : []),
@@ -281,10 +306,29 @@ export default function Home() {
     [],
   );
 
-  const { messages, sendMessage, status } = useChat<UIMessage>({
+  // 每次发送前：清理悬空 approval + 注入最新授权目录
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/chat",
+        prepareSendMessagesRequest: ({ messages: msgs, body }) => ({
+          body: {
+            ...body,
+            messages: stripPendingApprovals(msgs),
+            authorizedDirectories: authorizedDirsRef.current,
+          },
+        }),
+      }),
+    [],
+  );
+
+  const { messages, sendMessage, status, addToolApprovalResponse } = useChat<UIMessage>({
     id: activeId,
     messages: initialMessages,
-    transport: new TextStreamChatTransport({ api: "/api/chat" }),
+    transport,
+    // 所有待确认的工具调用都被响应后，自动重发请求让服务端继续执行
+    sendAutomaticallyWhen: ({ messages: msgs }) =>
+      lastAssistantMessageIsCompleteWithApprovalResponses({ messages: msgs }),
     onFinish: ({ messages: finalMessages, isAbort, isError }) => {
       // 必须在此处落盘：流式过程中 messages.length 与末条消息 id 均不变，
       // 下方持久化 effect 的指纹不会变化，导致最终回复内容无法写入 localStorage
@@ -587,6 +631,54 @@ export default function Home() {
               );
             })}
           </div>
+          {/* 授权目录管理 */}
+          <div className="px-4 py-3 border-t border-border">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-medium text-foreground/70">🔐 授权目录</span>
+              <button
+                type="button"
+                onClick={() => setShowAddDirectory((v) => !v)}
+                className="text-xs text-primary-600 hover:text-primary-500"
+              >
+                {showAddDirectory ? "取消" : "+ 添加"}
+              </button>
+            </div>
+            {authorizedDirs.length === 0 ? (
+              <p className="text-[11px] text-foreground/40">
+                未授权目录，AI 暂无法读写本地文件
+              </p>
+            ) : (
+              <div className="space-y-1 max-h-28 overflow-y-auto">
+                {authorizedDirs.map((d) => (
+                  <div
+                    key={d}
+                    className="flex items-center gap-1 text-[11px] text-foreground/70"
+                  >
+                    <span className="flex-1 truncate" title={d}>
+                      {d}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAuthorizedDirs(removeAuthorizedDirectory(d))}
+                      className="text-foreground/40 hover:text-danger px-0.5"
+                      aria-label="移除授权"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {showAddDirectory && (
+              <DirectoryAuthCard
+                onAllow={(dir) => {
+                  setAuthorizedDirs(addAuthorizedDirectory(dir));
+                  setShowAddDirectory(false);
+                }}
+                onCancel={() => setShowAddDirectory(false)}
+              />
+            )}
+          </div>
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
@@ -674,6 +766,7 @@ export default function Home() {
             const files = getMessageFiles(m);
             const exportsForThis = exportsByMessage[m.id] ?? [];
             const isExportBusy = exportBusy.has(m.id);
+            const pendingApprovals = getPendingApprovals(m);
             return (
               <div
                 key={m.id}
@@ -724,6 +817,26 @@ export default function Home() {
                     </div>
                   )}
                 </div>
+
+                {/* AI 回复：待确认的危险工具操作 */}
+                {m.role === "assistant" && pendingApprovals.length > 0 && (
+                  <div className="ml-10 mt-2 flex flex-col gap-2">
+                    {pendingApprovals.map((a) => (
+                      <ToolApprovalCard
+                        key={a.approvalId || a.toolCallId}
+                        toolName={a.toolName}
+                        summary={summarizeApproval(a)}
+                        onRespond={(approved) => {
+                          void addToolApprovalResponse({
+                            id: a.approvalId,
+                            approved,
+                            reason: approved ? "用户在界面确认" : "用户拒绝",
+                          });
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
 
                 {/* AI 回复：AI 生成的导出文件卡片（代码块下载按钮已内置在 MarkdownRenderer 里） */}
                 {m.role === "assistant" && exportsForThis.length > 0 && (

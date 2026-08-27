@@ -1,133 +1,133 @@
-# 科大精灵 · 校园 AI 助手（main 分支）
+# 科大精灵 · 智能体分支（agent）
 
-> 本文件是 `main` 分支的说明文档。
+> 本文件是 `agent` 分支的说明文档。
 >
-> `main` 是项目基线：一个面向中国科学技术大学师生的网页版校园问答助手，落地页 + 对话式问答，后端 `/api/chat` 流式返回，可调用「知识库检索」与「联网搜索」两个工具。
+> `agent` 在 `main` 的基础上增加「操作指定目录内文件」的能力，让科大精灵从纯问答助手变成类似 Agent 的工具：能列目录、读文件，也能在用户批准后写文件、执行命令；当用户指令不清晰时会主动追问。
+>
+> 本分支**不改变** `main` 里「Dify 知识库 + Dify 联网搜索」的既有实现，只是在其上新增能力。
 
 ## 1. 这是什么
 
-「科大精灵」是一个 Next.js 16（App Router）+ TypeScript 实现的校园 AI 助手网站。用户输入校园相关问题后，系统调用中科大 LLM 代理生成流式回答，并在需要时自动调用：
+`agent` 分支保留了 `main` 的全部问答能力（知识库检索 `query_knowledge_base`、联网搜索 `web_search`），并额外接入 4 个文件/执行工具：
 
-1. `query_knowledge_base` —— 查询 Dify 知识库（学校政策、办事流程、人员信息、办公地点等文档）。
-2. `web_search` —— 通过 Dify 联网搜索工作流（内部走 SearXNG 搜索引擎）检索互联网上的实时信息。
+| 工具 | 危险级别 | 说明 |
+| --- | --- | --- |
+| `list_dir` | 只读 | 列出一层目录内容，自动执行 |
+| `read_file` | 只读 | 读取文件内容（>512KB 自动截断），自动执行 |
+| `write_file` | 危险 | 新建/覆盖写文件，**需用户批准** |
+| `execute_command` | 危险 | 在授权目录内执行命令，**需用户批准** |
+
+所有文件操作都被限制在「用户授权目录」内；越权路径会被沙箱层直接拒绝。
 
 ## 2. 功能特性
 
-- **落地页与开场动画**：新拟态（neumorphism）风格落地页、可跳过开场动画、可选 3D 校园开场。
-- **流式对话**：基于 AI SDK `streamText` 的流式输出，首字即回。
-- **多轮工具调用**：模型按提示词策略自主选择工具，最多 5 步（`stopWhen: stepCountIs(5)`）。
-- **知识库检索**：并发检索 8 个 Dify 数据集，去重排序后作为上下文。
-- **联网搜索**：知识库未命中时转 Dify 联网工作流，返回真实搜索结果。
-- **历史会话**：会话列表与消息保存在浏览器 `localStorage`，可切换、展开、删除。
-- **对话导出**：一键把回答导出为 Markdown / Word / PDF / 文本 / 代码文件。
-- **主题与外观**：浅色 / 深色 / 跟随系统，多套主题色可选。
-- **文件上传**：支持图片与常见文档作为上下文附件。
+- **文件操作能力**：列目录、读文件、写文件、执行命令。
+- **目录授权**：用户在侧栏「授权目录」中手动添加允许访问的绝对路径，前端持久化到 `localStorage` 并随每次请求发送给后端。
+- **危险操作审批**：`write_file` / `execute_command` 会在消息里弹出确认卡片，用户点「允许执行」或「拒绝」后才继续。
+- **主动澄清**：指令不清晰时先追问（目标路径、预期产出等），最多连续追问 2 次，第 3 次给最佳猜测并说明假设。
+- **完整保留** `main` 的知识库检索与联网搜索能力。
 
 ## 3. 技术栈
 
-| 类别 | 选型 |
-| --- | --- |
-| 框架 | Next.js 16.2.12（App Router，Turbopack） |
-| UI | React 19.2.4 + Tailwind CSS 4 |
-| 语言 | TypeScript 5 |
-| AI | `ai` ^7.0.41、`@ai-sdk/openai` ^4.0.23、`@ai-sdk/react` ^4.0.44 |
-| 内容渲染 | `react-markdown` + `remark-gfm` |
-| 导出 | `docx`、`jspdf` |
+与 `main` 相同，**未新增任何依赖**：
 
-## 4. 目录结构
+- Next.js 16.2.12（App Router，Turbopack）
+- React 19.2.4 + Tailwind CSS 4 + TypeScript 5
+- AI SDK `ai` ^7.0.41、`@ai-sdk/openai`、`@ai-sdk/react`
+- Node 内置模块 `node:fs/promises`、`node:path`、`node:child_process`
+
+## 4. 目录结构（本分支新增）
 
 ```text
 four-piggies-repository/
 ├── app/
-│   ├── api/
-│   │   ├── chat/route.ts          # 核心对话接口（流式 + 工具调用）
-│   │   ├── summarize/route.ts     # 会话标题自动总结
-│   │   └── export/route.ts        # 回答导出文件生成
-│   ├── components/                # 落地页 / 动画 / Logo / Markdown 渲染
+│   ├── api/chat/route.ts                 # 追加文件工具、toolApproval、授权目录注入
 │   ├── lib/
-│   │   ├── ai-clients.ts          # 科大 LLM 客户端与模型名
-│   │   ├── dify-knowledge.ts      # Dify 知识库检索（多数据集并发）
-│   │   ├── export.ts              # 导出文件前端下载
-│   │   ├── markdown.ts            # Markdown 工具
-│   │   └── parse-llm-json.ts      # LLM JSON 解析
-│   ├── layout.tsx / page.tsx / globals.css
-├── public/                        # 静态资源
-├── .env.local                     # 本地环境变量（已 gitignore）
-├── package.json
-└── start.bat                      # Windows 一键启动
+│   │   └── tools/                        # ★ 新增：文件操作后端
+│   │       ├── fs-tools.ts               # 4 个工具定义
+│   │       ├── sandbox.ts                # 路径锚定与越权校验
+│   │       ├── executor.ts               # 实际读写/执行命令
+│   │       └── agent-prompt.ts           # 主动澄清 + 文件工具提示词
+│   ├── components/
+│   │   └── chat/                         # ★ 新增：审批/授权前端
+│   │       ├── ToolApprovalCard.tsx      # 危险操作确认卡片
+│   │       ├── DirectoryAuthCard.tsx     # 添加授权目录表单
+│   │       ├── approval-parts.ts         # 审批 part 解析与消息清理
+│   │       └── authorized-directories.ts # 授权目录持久化
+│   └── page.tsx                          # 接入授权目录注入、审批卡片
+└── .env.local
 ```
 
 ## 5. 环境变量
 
-所有配置在 `.env.local`（已加入 `.gitignore`）。变量如下：
+在 `main` 的配置基础上，新增一个**可选**变量：
 
 | 变量 | 说明 |
 | --- | --- |
-| `OPENAI_API_KEY` | 科大 LLM 代理的 API Key |
-| `OPENAI_BASE_URL` | 科大 LLM 代理地址，`https://api.llm.ustc.edu.cn/v1` |
-| `CHAT_MODEL` | 对话模型，不设时默认 `deepseek-v4-flash-ascend`（可选 `qwen-chat` / `qwen3.6-chat`） |
-| `DIFY_BASE_URL` | 自建 Dify 服务地址（结尾不带 `/v1`） |
-| `DIFY_KNOWLEDGE_API_KEY` | Dify 知识库 Dataset Key（`dataset-` 开头） |
-| `DATASET_IDS` | 8 个知识库数据集 ID，逗号分隔 |
-| `DIFY_WORKFLOW_API_KEY` | 联网搜索工作流的 API Key（`app-` 开头） |
-| `TAVILY_API_KEY` | 已弃用（联网搜索改为走 Dify），可留可删 |
-| `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` | 硅基流动，本分支当前未实际使用 |
+| `TOOL_APPROVAL_SECRET` | 审批请求/响应的签名密钥，用于绑定 approval 与回传、防伪造。本地部署可省略，缺省使用 `campus-ai-local-secret` |
+
+其余变量（`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`CHAT_MODEL`、`DIFY_BASE_URL`、`DIFY_KNOWLEDGE_API_KEY`、`DATASET_IDS`、`DIFY_WORKFLOW_API_KEY` 等）与 `main` 一致。
 
 ## 6. 安装与运行
 
 ```bash
-# 1. 安装依赖（首次）
 npm install
-
-# 2. 配置 .env.local（可参考 .env.local.example）
-
-# 3. 启动开发服务器
+# 配置 .env.local
 npm run dev
-# 或 Windows 下双击 start.bat
 ```
 
-访问 <http://localhost:3000>。
+访问 <http://localhost:3000>，进入主界面后在左侧「🔐 授权目录」里添加一个允许访问的目录，即可让 AI 操作该目录下的文件。
 
 ## 7. 核心实现
 
-### 7.1 `/api/chat` 流式对话
+### 7.1 文件工具（`app/lib/tools/fs-tools.ts`）
 
-`app/api/chat/route.ts` 使用 `streamText`：
+`list_dir` / `read_file` 自动执行；`write_file` / `execute_command` 通过 `toolApproval` 配置为 `user-approval`，只有用户批准后 SDK 才会真正调用其 `execute`。
 
-- 模型：`chatClient.chat(CHAT_MODEL)`（科大 LLM 代理）。
-- 工具：`query_knowledge_base`、`web_search`。
-- 步数上限：`stopWhen: stepCountIs(5)`。
-- 输出：文本流式返回（`createTextStreamResponse`）。
+### 7.2 路径沙箱（`app/lib/tools/sandbox.ts`）
 
-### 7.2 知识库检索
+- `authorizePath`：目标路径必须落在某个授权目录之内（Windows 大小写不敏感）。
+- `resolveInside`：相对路径以 `cwd` 为根解析，词法 `..` 越界直接拒绝。
+- 只做词法校验，不做符号链接解析（本地/局域网信任模型下足够）。
 
-`app/lib/dify-knowledge.ts`：
+### 7.3 执行器（`app/lib/tools/executor.ts`）
 
-- 调用 Dify 知识库检索接口 `POST {DIFY_BASE_URL}/v1/datasets/{id}/retrieve`。
-- 对 `DATASET_IDS` 里所有数据集 `Promise.allSettled` 并发检索。
-- 按内容去重、按相似度分数降序，拼接成带序号的上下文交给模型。
-- 单次请求 15 秒超时，单个数据集失败不影响其它。
+- 写文件：相对路径锚定到 `cwd`，自动创建父目录。
+- 读文件：上限 512KB，超出截断并标注。
+- 执行命令：`child_process.exec`，60 秒超时、64KB 输出截断、无交互输入。
 
-### 7.3 联网搜索
+### 7.4 目录授权与审批
 
-`web_search` 工具调用 Dify 工作流 `POST {DIFY_BASE_URL}/v1/workflows/run`：
+- 前端把授权目录列表存入 `localStorage`，每次发送时通过 `prepareSendMessagesRequest` 注入 `authorizedDirectories`。
+- 后端 `setAllowedDirectories()` 注入工具模块，所有路径校验都基于该列表。
+- 危险工具触发审批时，后端在 UI message stream 里发出 `tool-approval-request`，前端渲染确认卡片，用户批准/拒绝后通过 `addToolApprovalResponse` 回传，`sendAutomaticallyWhen` 自动续跑。
 
-- 传入 `inputs: { query }`，`response_mode: "blocking"`。
-- 取 `data.outputs.result` 作为搜索结果返回给模型。
-- 工作流内部使用 SearXNG 搜索并整理成 Markdown。
+### 7.5 流式协议调整（重要）
 
-### 7.4 系统提示词
+为了把「审批请求」原样传给前端，本分支把 `main` 的 `createTextStreamResponse + textStream + TextStreamChatTransport` 调整为 `toUIMessageStreamResponse + DefaultChatTransport`。纯文本流无法承载 `tool-approval-request`，这正是审批卡片能正常弹出的前提；该调整不影响原有知识库/联网搜索的正常问答。
 
-系统提示词描述了工具的适用场景与调用策略：优先查知识库，未命中再联网搜索；并明确要求模型"不要声称自己无法联网搜索"。
+### 7.6 主动澄清（`app/lib/tools/agent-prompt.ts`）
 
-## 8. 已知限制
+提示词追加了两段：
 
-- 知识库能答得多好取决于数据集里是否收录了对应文档。
-- 全网搜索容易命中"他校邀请中科大教授"之类内容，模型会诚实说明并给建议。
-- 科大 LLM 代理在不同时段的响应延迟波动较大，慢时可切换 `CHAT_MODEL`。
+- 主动澄清规则：简单校园问答直接答；信息不足时先提 1 个具体澄清问题；文件/执行类需求先澄清路径与产出；最多追问 2 次。
+- 文件与执行能力说明：工具能力边界、授权提示、以及「先写脚本再执行」的运行模式。
 
-## 9. 分支关系
+## 8. 安全模型
 
-- `main`（本分支）：项目基线，Dify 知识库 + Dify 联网搜索。
-- `知识库构建`：检索升级分支（分类器 + Supabase 结构化数据 + 爬虫建库 + eval），该方案中的 Supabase / Tavily / 爬虫已被视为弃用。
-- `agent`：在 `main` 基础上增加「操作指定目录内文件」的智能体能力（详见 `README-agent.md`）。
+- 所有文件操作限定在用户**显式授权**的目录内。
+- 只读操作自动执行，写文件/执行命令**每次都要用户确认**。
+- 命令执行带超时、输出截断、无交互，降低失控风险。
+- 审批请求带签名，绑定 approval id 与 tool call id。
+
+## 9. 已知限制
+
+- 沙箱只做词法路径校验，不解析符号链接；面向本地/可信局域网，不适用于不可信多租户环境。
+- 模型对工具的选择是概率性的，极端情况下可能仍需提示词/兜底引导。
+- 科大 LLM 响应延迟波动较大，慢时可切换 `CHAT_MODEL`。
+
+## 10. 分支关系
+
+- `main`：项目基线，Dify 知识库 + Dify 联网搜索。
+- `知识库构建`：检索升级实验分支（分类器 + Supabase + 爬虫 + eval），已弃用。
+- `agent`（本分支）：在 `main` 之上增加文件操作智能体能力，保留 `main` 的检索实现不变。
