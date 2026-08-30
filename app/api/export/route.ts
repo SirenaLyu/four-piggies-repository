@@ -100,6 +100,7 @@ export async function POST(req: Request) {
   try {
     const result = await generateText({
       model: chatClient.chat(CHAT_MODEL),
+      abortSignal: req.signal,
       system: SYSTEM_PROMPT,
       prompt: transcript,
     });

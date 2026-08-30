@@ -37,6 +37,7 @@ export async function POST(req: Request) {
   try {
     const result = await generateText({
       model: chatClient.chat(CHAT_MODEL),
+      abortSignal: req.signal,
       system: SYSTEM_PROMPT,
       prompt: `用户问题：${userText}\n\n助手回答：${assistantText}`,
     });

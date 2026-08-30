@@ -3,10 +3,15 @@ const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 export const MAX_WEB_SEARCH_CALLS = 2;
 export const MAX_KNOWLEDGE_SEARCH_CALLS = 1;
 export const FINAL_ANSWER_STEP = 3;
+export const AGENT_FINAL_ANSWER_STEP = 6;
 
 export interface RetrievalUsage {
   webSearches: number;
   knowledgeSearches: number;
+}
+
+export function finalAnswerStepForCapabilities(agentEnabled: boolean): number {
+  return agentEnabled ? AGENT_FINAL_ANSWER_STEP : FINAL_ANSWER_STEP;
 }
 
 const WEATHER_PATTERN =
@@ -225,8 +230,9 @@ export function activeToolNamesForStep(
   toolNames: string[],
   stepNumber: number,
   usage: RetrievalUsage,
+  finalAnswerStep = FINAL_ANSWER_STEP,
 ): string[] {
-  if (stepNumber >= FINAL_ANSWER_STEP) return [];
+  if (stepNumber >= finalAnswerStep) return [];
   return toolNames.filter((toolName) => {
     if (toolName === "web_search") {
       return usage.webSearches < MAX_WEB_SEARCH_CALLS;

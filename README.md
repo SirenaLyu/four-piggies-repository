@@ -75,6 +75,7 @@ four-piggies-repository/
 | `DIFY_MAX_CONTEXT_CHUNKS` | 最终上下文片段上限，默认 12 |
 | `DIFY_RERANKING_ENABLED` | 是否启用 reranker，默认 true |
 | `DIFY_RERANKING_PROVIDER` / `DIFY_RERANKING_MODEL` | 覆盖默认 bge reranker |
+| `DIFY_DATASET_SCORE_THRESHOLDS` | 可选的每数据集最低分数 JSON，用于过滤库内低相关片段 |
 | `DIFY_WORKFLOW_API_KEY` | 联网搜索工作流的 API Key（`app-` 开头） |
 | `DIFY_SEARCH_BLOCKED_DOMAINS` | 联网结果额外屏蔽的域名，英文逗号分隔 |
 | `AGENT_ALLOWED_ROOTS` | Agent 可访问的服务端根目录；浏览器授权只能在这些根目录内生效 |
@@ -120,7 +121,7 @@ npm run dev
 
 - 模型：`chatClient.chat(CHAT_MODEL)`（科大 LLM 代理）。
 - 工具：根据客户端能力开关动态注册知识库、联网搜索和 Agent 文件工具。
-- 步数上限：最多 4 步；前三步允许按预算调用工具，第 4 步强制关闭工具并生成最终答案。
+- 步数上限：普通问答最多 4 步；Agent 模式最多 7 步以容纳多次文件操作，最后一步统一关闭工具并生成最终答案。
 - 输出：AI SDK UI message stream，可携带文本、工具调用和审批请求。
 - 安全边界：能力开关由服务端再次解析；关闭的工具不进入 `streamText`。
 
@@ -132,6 +133,7 @@ npm run dev
 - 先按奖助学金、图书馆、通知、班车、校历、课程、政策和校园信息进行数据集路由，只并发检索相关数据集。
 - 正确读取 `record.score`，同时兼容 `data.records` 响应结构。
 - 若一次查询需要多个主题，由于不同知识库的 reranker 分数不可直接比较，按相关库的库内排名轮转选取并按内容去重。
+- 可通过 `DIFY_DATASET_SCORE_THRESHOLDS` 为每个数据集设置独立最低分数；缓存键包含数据集和检索配置，配置变化不会复用旧结果。
 - 默认显式使用 `semantic_search + bge-reranker-v2-m3 + top_k=5 + 无统一阈值`。
 - 单次请求 15 秒超时，单个数据集失败不影响其它。
 - 使用最多 200 项的 TTL/LRU 缓存；失败和空结果不缓存。
@@ -145,6 +147,7 @@ npm run dev
 - 传入 `inputs: { query }`，`response_mode: "blocking"`，并对 `data.outputs.result` 做风险内容、低质量域名和提示词注入过滤。
 - 校园、天气、政府和教育域名按可信度优先排序，送入模型的结果最多 12000 字符。
 - 工作流内部使用 SearXNG 搜索并整理成 Markdown。
+- 浏览器断开连接时会同步取消模型、Dify Workflow 和知识库请求，避免后台继续消耗资源。
 
 ### 7.4 Agent 安全模型
 

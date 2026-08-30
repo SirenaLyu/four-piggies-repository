@@ -15,6 +15,7 @@ import {
   retrieveKnowledgeContext,
 } from "../../lib/dify-knowledge";
 import { TtlLruCache } from "../../lib/ttl-lru-cache";
+import { withTimeoutSignal } from "../../lib/abort-signals";
 import {
   capabilityFingerprint,
   normalizeCapabilities,
@@ -24,11 +25,11 @@ import { buildAgentPromptSections } from "../../lib/tools/agent-prompt";
 import { createFsTools } from "../../lib/tools/fs-tools";
 import { resolveAuthorizedDirectories } from "../../lib/tools/sandbox";
 import {
-  FINAL_ANSWER_STEP,
   MAX_KNOWLEDGE_SEARCH_CALLS,
   MAX_WEB_SEARCH_CALLS,
   activeToolNamesForStep,
   blockedSearchDomainsFromEnv,
+  finalAnswerStepForCapabilities,
   normalizeWebSearchQuery,
   sanitizeWebSearchResult,
   type RetrievalUsage,
@@ -125,7 +126,10 @@ function sanitizeMessagesForModel(
  * 工具 1: query_knowledge_base
  * 调用 Dify 知识库检索 API（支持多知识库并发检索）查询学校文档资料
  */
-function createQueryKnowledgeBaseTool(usage: RetrievalUsage) {
+function createQueryKnowledgeBaseTool(
+  usage: RetrievalUsage,
+  requestSignal: AbortSignal,
+) {
   return tool({
     description:
       "查询学校的知识库资料，包括政策文件、规章制度、办事流程、人员联系方式、办公地点等文档内容。" +
@@ -159,28 +163,33 @@ function createQueryKnowledgeBaseTool(usage: RetrievalUsage) {
       }
 
       try {
-      // 并发检索所有已配置的 Dify 知识库，合并去重后得到上下文
-      const startedAt = Date.now();
-      const result = await retrieveKnowledgeContext(query);
-      console.log(
-        `[query_knowledge_base] 工具总耗时 ${Date.now() - startedAt}ms`,
-      );
+        // 只检索路由命中的 Dify 知识库，合并去重后得到上下文
+        const startedAt = Date.now();
+        const result = await retrieveKnowledgeContext(query, requestSignal);
+        console.log(
+          `[query_knowledge_base] 工具总耗时 ${Date.now() - startedAt}ms`,
+        );
 
-      if (!result.ok || !result.context) {
-        console.warn(`[query_knowledge_base] 未命中：${result.error ?? "无结果"}`);
-        return `知识库中未检索到相关内容。${result.error ?? ""}`.trim();
-      }
+        if (!result.ok || !result.context) {
+          console.warn(
+            `[query_knowledge_base] 未命中：${result.error ?? "无结果"}`,
+          );
+          return `知识库中未检索到相关内容。${result.error ?? ""}`.trim();
+        }
 
-      console.log(
-        `[query_knowledge_base] 命中 ${result.chunkCount} 个片段` +
-          (result.error ? `（${result.error}）` : ""),
-      );
-      return result.error ? `${result.error}\n\n${result.context}` : result.context;
+        console.log(
+          `[query_knowledge_base] 命中 ${result.chunkCount} 个片段` +
+            (result.error ? `（${result.error}）` : ""),
+        );
+        return result.error
+          ? `${result.error}\n\n${result.context}`
+          : result.context;
       } catch (err: unknown) {
-      // 兜底：即使检索模块内部异常，也只返回错误文本，不让主进程崩溃
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[query_knowledge_base] 异常: ${message}`);
-      return `知识库查询异常：${message}。请稍后重试。`;
+        if (requestSignal.aborted) throw err;
+        // 兜底：即使检索模块内部异常，也只返回错误文本，不让主进程崩溃
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[query_knowledge_base] 异常: ${message}`);
+        return `知识库查询异常：${message}。请稍后重试。`;
       }
     },
   });
@@ -190,86 +199,88 @@ function createQueryKnowledgeBaseTool(usage: RetrievalUsage) {
  * 工具 2: web_search
  * 调用 Dify 联网搜索 Workflow（内部使用 SearXNG 搜索引擎）获取实时网络信息
  */
-function createWebSearchTool(usage: RetrievalUsage) {
+function createWebSearchTool(
+  usage: RetrievalUsage,
+  requestSignal: AbortSignal,
+) {
   return tool({
-  description:
-    "实时联网搜索工具：通过搜索引擎检索互联网上的最新公开信息。" +
-    "当知识库查不到答案、内容可能过时，或用户需要最新动态（新闻、通知、讲座、活动、政策变化等）时使用。" +
-    "优先聚焦与中国科学技术大学相关的内容，但也可以搜索一般性问题。",
-  inputSchema: z.object({
-    query: z
-      .string()
-      .describe("要搜索的关键词，保留完整语义以获得更好的搜索结果"),
-  }),
-  execute: async ({ query }) => {
-    if (usage.webSearches >= MAX_WEB_SEARCH_CALLS) {
-      return "联网搜索次数已达上限。禁止再次调用 web_search，请综合已有结果给出最终答案；证据不足时明确说明。";
-    }
-    usage.webSearches += 1;
-    const apiKey = process.env.DIFY_WORKFLOW_API_KEY;
+    description:
+      "实时联网搜索工具：通过搜索引擎检索互联网上的最新公开信息。" +
+      "当知识库查不到答案、内容可能过时，或用户需要最新动态（新闻、通知、讲座、活动、政策变化等）时使用。" +
+      "优先聚焦与中国科学技术大学相关的内容，但也可以搜索一般性问题。",
+    inputSchema: z.object({
+      query: z
+        .string()
+        .describe("要搜索的关键词，保留完整语义以获得更好的搜索结果"),
+    }),
+    execute: async ({ query }) => {
+      if (usage.webSearches >= MAX_WEB_SEARCH_CALLS) {
+        return "联网搜索次数已达上限。禁止再次调用 web_search，请综合已有结果给出最终答案；证据不足时明确说明。";
+      }
+      usage.webSearches += 1;
+      const apiKey = process.env.DIFY_WORKFLOW_API_KEY;
 
-    if (!apiKey) {
-      return (
-        "联网搜索服务尚未配置。请联系管理员设置环境变量：\n" +
-        "- `DIFY_WORKFLOW_API_KEY`：Dify 联网搜索工作流的 API 密钥"
+      if (!apiKey) {
+        return (
+          "联网搜索服务尚未配置。请联系管理员设置环境变量：\n" +
+          "- `DIFY_WORKFLOW_API_KEY`：Dify 联网搜索工作流的 API 密钥"
+        );
+      }
+
+      const baseUrl = (process.env.DIFY_BASE_URL || "").replace(/\/+$/, "");
+      if (!baseUrl) {
+        return "联网搜索服务尚未配置。请联系管理员设置 DIFY_BASE_URL。";
+      }
+
+      const normalizedQuery = normalizeWebSearchQuery(query);
+      console.log(
+        `[web_search] 调用 Dify Workflow 搜索 (${usage.webSearches}/${MAX_WEB_SEARCH_CALLS}): ${normalizedQuery}`,
       );
-    }
 
-    const baseUrl = (process.env.DIFY_BASE_URL || "").replace(/\/+$/, "");
-    if (!baseUrl) {
-      return "联网搜索服务尚未配置。请联系管理员设置 DIFY_BASE_URL。";
-    }
-
-    const normalizedQuery = normalizeWebSearchQuery(query);
-    console.log(
-      `[web_search] 调用 Dify Workflow 搜索 (${usage.webSearches}/${MAX_WEB_SEARCH_CALLS}): ${normalizedQuery}`,
-    );
-
-    try {
-      const response = await fetch(`${baseUrl}/v1/workflows/run`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          inputs: { query: normalizedQuery },
-          response_mode: "blocking",
-          user: "campus-ai-assistant",
-        }),
-        signal: AbortSignal.timeout(60_000),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(
-          `[web_search] HTTP ${response.status}: ${errorText}`,
-        );
-        return `联网搜索失败（HTTP ${response.status}）。请稍后重试。`;
-      }
-
-      const data = await response.json();
-      const result = data?.data?.outputs?.result;
-
-      if (typeof result === "string" && result.trim()) {
-        const safeResult = sanitizeWebSearchResult(result, normalizedQuery, {
-          blockedDomains: blockedSearchDomainsFromEnv(
-            process.env.DIFY_SEARCH_BLOCKED_DOMAINS,
-          ),
+      try {
+        const response = await fetch(`${baseUrl}/v1/workflows/run`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            inputs: { query: normalizedQuery },
+            response_mode: "blocking",
+            user: "campus-ai-assistant",
+          }),
+          signal: withTimeoutSignal(requestSignal, 60_000),
         });
-        console.log(
-          `[web_search] 原始结果 ${result.length} 字符，过滤后 ${safeResult.length} 字符`,
-        );
-        return `【联网搜索结果（已做内容安全与来源筛选）】\n${safeResult}`;
-      }
 
-      return "未找到相关新闻或通知。";
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[web_search] 异常: ${message}`);
-      return `联网搜索异常：${message}`;
-    }
-  },
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[web_search] HTTP ${response.status}: ${errorText}`);
+          return `联网搜索失败（HTTP ${response.status}）。请稍后重试。`;
+        }
+
+        const data = await response.json();
+        const result = data?.data?.outputs?.result;
+
+        if (typeof result === "string" && result.trim()) {
+          const safeResult = sanitizeWebSearchResult(result, normalizedQuery, {
+            blockedDomains: blockedSearchDomainsFromEnv(
+              process.env.DIFY_SEARCH_BLOCKED_DOMAINS,
+            ),
+          });
+          console.log(
+            `[web_search] 原始结果 ${result.length} 字符，过滤后 ${safeResult.length} 字符`,
+          );
+          return `【联网搜索结果（已做内容安全与来源筛选）】\n${safeResult}`;
+        }
+
+        return "未找到相关新闻或通知。";
+      } catch (err: unknown) {
+        if (requestSignal.aborted) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[web_search] 异常: ${message}`);
+        return `联网搜索异常：${message}`;
+      }
+    },
   });
 }
 
@@ -447,10 +458,10 @@ export async function POST(req: Request) {
   };
   if (capabilities.knowledgeBase) {
     enabledTools.query_knowledge_base =
-      createQueryKnowledgeBaseTool(retrievalUsage);
+      createQueryKnowledgeBaseTool(retrievalUsage, req.signal);
   }
   if (capabilities.webSearch) {
-    enabledTools.web_search = createWebSearchTool(retrievalUsage);
+    enabledTools.web_search = createWebSearchTool(retrievalUsage, req.signal);
   }
   if (capabilities.agent) {
     Object.assign(enabledTools, createFsTools(authorizedDirs));
@@ -458,22 +469,25 @@ export async function POST(req: Request) {
   let usedAgentTool = false;
 
   const systemPrompt = buildSystemPrompt(capabilities);
+  const finalAnswerStep = finalAnswerStepForCapabilities(capabilities.agent);
   const result = streamText({
     model: chatModel,
+    abortSignal: req.signal,
     system: systemPrompt,
     messages: await convertToModelMessages(
       messages as Parameters<typeof convertToModelMessages>[0],
     ),
     tools: enabledTools,
-    // 最多 3 个工具/推理 step，第 4 步强制关闭工具并生成最终答案。
-    stopWhen: stepCountIs(FINAL_ANSWER_STEP + 1),
+    // 普通问答第 4 步强制总结；Agent 允许更多文件操作，但最终仍保留无工具回答步骤。
+    stopWhen: stepCountIs(finalAnswerStep + 1),
     prepareStep: ({ stepNumber }) => {
       const activeTools = activeToolNamesForStep(
         Object.keys(enabledTools),
         stepNumber,
         retrievalUsage,
+        finalAnswerStep,
       );
-      if (stepNumber >= FINAL_ANSWER_STEP) {
+      if (stepNumber >= finalAnswerStep) {
         return {
           activeTools,
           toolChoice: "none" as const,

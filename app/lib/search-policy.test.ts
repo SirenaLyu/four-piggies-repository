@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activeToolNamesForStep,
+  finalAnswerStepForCapabilities,
   normalizeWebSearchQuery,
   sanitizeWebSearchResult,
 } from "./search-policy.ts";
@@ -63,6 +64,30 @@ test("检索预算耗尽后关闭对应工具，最后一步关闭全部工具",
       knowledgeSearches: 0,
       webSearches: 0,
     }),
+    [],
+  );
+});
+
+test("Agent 模式保留更多文件工具步骤，但仍受检索次数预算约束", () => {
+  const finalAnswerStep = finalAnswerStepForCapabilities(true);
+  const tools = ["query_knowledge_base", "web_search", "read_file"];
+  assert.equal(finalAnswerStep, 6);
+  assert.deepEqual(
+    activeToolNamesForStep(
+      tools,
+      3,
+      { knowledgeSearches: 1, webSearches: 2 },
+      finalAnswerStep,
+    ),
+    ["read_file"],
+  );
+  assert.deepEqual(
+    activeToolNamesForStep(
+      tools,
+      finalAnswerStep,
+      { knowledgeSearches: 0, webSearches: 0 },
+      finalAnswerStep,
+    ),
     [],
   );
 });

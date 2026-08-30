@@ -1,6 +1,7 @@
 // ============================================================================
 
 import { TtlLruCache } from "./ttl-lru-cache.ts";
+import { withTimeoutSignal } from "./abort-signals.ts";
 // Dify 知识库检索模块
 // ----------------------------------------------------------------------------
 // 调用自建 Dify 的「知识库检索 API」（Dataset Retrieval API）：
@@ -14,6 +15,7 @@ import { TtlLruCache } from "./ttl-lru-cache.ts";
 //   DATASET_IDS                知识库 Dataset ID 列表，英文逗号分隔，如 "id1,id2,id3"
 //   DIFY_RETRIEVAL_TOP_K       （可选）每库候选数，默认 5
 //   DIFY_RETRIEVAL_SCORE_THRESHOLD （可选）设置后才启用统一阈值
+//   DIFY_DATASET_SCORE_THRESHOLDS  （可选）按 Dataset ID 设置独立最低分数
 //   DIFY_RERANKING_ENABLED     （可选）默认 true
 //   DIFY_RERANKING_PROVIDER / DIFY_RERANKING_MODEL （可选）覆盖 reranker
 // ============================================================================
@@ -230,6 +232,43 @@ function numberFromEnv(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+export function parseDatasetScoreThresholds(
+  value: string | undefined,
+): Record<string, number> {
+  if (!value?.trim()) return {};
+  try {
+    const raw = JSON.parse(value) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(raw).filter(
+        (entry): entry is [string, number] =>
+          Boolean(entry[0].trim()) &&
+          typeof entry[1] === "number" &&
+          Number.isFinite(entry[1]) &&
+          entry[1] >= 0 &&
+          entry[1] <= 1,
+      ),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[dify-knowledge] DIFY_DATASET_SCORE_THRESHOLDS 不是合法 JSON：${message}`,
+    );
+    return {};
+  }
+}
+
+export function filterChunksByDatasetThreshold(
+  chunks: KnowledgeChunk[],
+  datasetId: string,
+  configuredValue: string | undefined =
+    process.env.DIFY_DATASET_SCORE_THRESHOLDS,
+): KnowledgeChunk[] {
+  const threshold = parseDatasetScoreThresholds(configuredValue)[datasetId];
+  return threshold === undefined
+    ? chunks
+    : chunks.filter((chunk) => chunk.score >= threshold);
+}
+
 /** 使用项目历史评测验证过的 semantic + reranker + top_k=5 默认参数。 */
 export function buildRetrievalModel(
   env: NodeJS.ProcessEnv = process.env,
@@ -255,6 +294,24 @@ export function buildRetrievalModel(
   }
   if (thresholdEnabled) model.score_threshold = threshold;
   return model;
+}
+
+export function buildKnowledgeCacheKey(
+  query: string,
+  config: { baseUrl: string; datasetIds: string[] },
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return JSON.stringify({
+    query: normalizeQueryKey(query),
+    baseUrl: config.baseUrl.replace(/\/+$/, ""),
+    datasetIds: [...config.datasetIds].sort(),
+    routeMap: env.DIFY_DATASET_ROUTE_MAP?.trim() || "",
+    retrievalModel: buildRetrievalModel(env),
+    datasetThresholds: parseDatasetScoreThresholds(
+      env.DIFY_DATASET_SCORE_THRESHOLDS,
+    ),
+    maxContextChunks: env.DIFY_MAX_CONTEXT_CHUNKS?.trim() || "",
+  });
 }
 
 /**
@@ -298,6 +355,7 @@ async function retrieveFromDataset(
   apiKey: string,
   datasetId: string,
   query: string,
+  requestSignal?: AbortSignal,
 ): Promise<KnowledgeChunk[]> {
   const body: Record<string, unknown> = {
     query,
@@ -316,7 +374,7 @@ async function retrieveFromDataset(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: withTimeoutSignal(requestSignal, REQUEST_TIMEOUT_MS),
     },
   );
 
@@ -334,9 +392,16 @@ async function retrieveFromDataset(
     `[dify-knowledge] 知识库 ${datasetId} 请求耗时 ${Date.now() - startedAt}ms，返回 ${records.length} 条 record`,
   );
 
-  return records
+  const chunks = records
     .map((record) => extractRecord(record, datasetId))
     .filter((chunk): chunk is KnowledgeChunk => chunk !== null);
+  const filtered = filterChunksByDatasetThreshold(chunks, datasetId);
+  if (filtered.length !== chunks.length) {
+    console.log(
+      `[dify-knowledge] 知识库 ${datasetId} 按独立阈值过滤 ${chunks.length - filtered.length} 条低分片段`,
+    );
+  }
+  return filtered;
 }
 
 /**
@@ -347,6 +412,7 @@ async function retrieveFromDataset(
  */
 export async function retrieveKnowledgeContext(
   query: string,
+  requestSignal?: AbortSignal,
 ): Promise<KnowledgeRetrievalResult> {
   const { baseUrl, apiKey, datasetIds } = getDifyKnowledgeConfig();
 
@@ -366,7 +432,7 @@ export async function retrieveKnowledgeContext(
     };
   }
 
-  const cacheKey = normalizeQueryKey(query);
+  const cacheKey = buildKnowledgeCacheKey(query, { baseUrl, datasetIds });
   const cached = retrievalCache.get(cacheKey);
   if (cached) return cached;
 
@@ -380,9 +446,12 @@ export async function retrieveKnowledgeContext(
   const retrieveStartedAt = Date.now();
   const settled = await Promise.allSettled(
     routedDatasetIds.map((datasetId) =>
-      retrieveFromDataset(baseUrl, apiKey, datasetId, query),
+      retrieveFromDataset(baseUrl, apiKey, datasetId, query, requestSignal),
     ),
   );
+  if (requestSignal?.aborted) {
+    throw requestSignal.reason ?? new DOMException("请求已取消", "AbortError");
+  }
   console.log(
     `[dify-knowledge] ${routedDatasetIds.length} 个知识库并发检索总耗时 ${Date.now() - retrieveStartedAt}ms`,
   );

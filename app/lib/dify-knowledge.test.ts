@@ -2,8 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildRetrievalModel,
+  buildKnowledgeCacheKey,
   extractRecord,
   extractRecordsFromResponse,
+  filterChunksByDatasetThreshold,
+  parseDatasetScoreThresholds,
   routeDatasetIds,
   selectContextChunks,
   type KnowledgeChunk,
@@ -92,4 +95,39 @@ test("未命中主题时只回退到信息、政策与通知库", () => {
     "ef053c5b-7d01-40e7-a2b6-cbce54ac261f",
     "76ca3310-ba82-4cd4-90d8-c3ed6fc1f3a8",
   ]);
+});
+
+test("支持按数据集设置独立最低分数", () => {
+  const configured = JSON.stringify({ "dataset-a": 0.6, "dataset-b": 0.2 });
+  assert.deepEqual(parseDatasetScoreThresholds(configured), {
+    "dataset-a": 0.6,
+    "dataset-b": 0.2,
+  });
+  const chunks: KnowledgeChunk[] = [
+    { datasetId: "dataset-a", content: "低相关", score: 0.59 },
+    { datasetId: "dataset-a", content: "高相关", score: 0.61 },
+  ];
+  assert.deepEqual(
+    filterChunksByDatasetThreshold(chunks, "dataset-a", configured).map(
+      (chunk) => chunk.content,
+    ),
+    ["高相关"],
+  );
+});
+
+test("知识库缓存键隔离数据集和检索配置", () => {
+  const config = { baseUrl: "https://dify.example", datasetIds: ["a"] };
+  const first = buildKnowledgeCacheKey("同一问题", config, {
+    DIFY_RETRIEVAL_TOP_K: "5",
+  } as NodeJS.ProcessEnv);
+  const changedDataset = buildKnowledgeCacheKey(
+    "同一问题",
+    { ...config, datasetIds: ["b"] },
+    { DIFY_RETRIEVAL_TOP_K: "5" } as NodeJS.ProcessEnv,
+  );
+  const changedModel = buildKnowledgeCacheKey("同一问题", config, {
+    DIFY_RETRIEVAL_TOP_K: "8",
+  } as NodeJS.ProcessEnv);
+  assert.notEqual(first, changedDataset);
+  assert.notEqual(first, changedModel);
 });
