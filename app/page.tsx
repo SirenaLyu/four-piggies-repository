@@ -1,7 +1,12 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { TextStreamChatTransport, type UIMessage, type FileUIPart } from "ai";
+import {
+  DefaultChatTransport,
+  lastAssistantMessageIsCompleteWithApprovalResponses,
+  type FileUIPart,
+  type UIMessage,
+} from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   downloadExportFile,
@@ -10,6 +15,24 @@ import {
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
 import { Logo } from "./components/Logo";
 import { LandingPage } from "./components/LandingPage";
+import { DirectoryAuthCard } from "./components/chat/DirectoryAuthCard";
+import { ToolApprovalCard } from "./components/chat/ToolApprovalCard";
+import {
+  getPendingApprovals,
+  hasPendingApprovals,
+  stripPendingApprovals,
+  summarizeApproval,
+} from "./components/chat/approval-parts";
+import {
+  addAuthorizedDirectory,
+  loadAuthorizedDirs,
+  removeAuthorizedDirectory,
+} from "./components/chat/authorized-directories";
+import {
+  DEFAULT_CAPABILITIES,
+  normalizeCapabilities,
+  type AssistantCapabilities,
+} from "./lib/capabilities";
 
 // ===== 主题色预设 =====
 const THEME_COLORS = [
@@ -18,6 +41,16 @@ const THEME_COLORS = [
   { key: "teal",   label: "青碧",   color: "#0d9488" },
   { key: "rose",   label: "玫瑰红", color: "#e11d48" },
 ] as const;
+
+const CAPABILITY_OPTIONS: Array<{
+  key: keyof AssistantCapabilities;
+  label: string;
+  description: string;
+}> = [
+  { key: "knowledgeBase", label: "知识库检索", description: "查询校园政策、办事流程和校内资料" },
+  { key: "webSearch", label: "联网搜索", description: "查询最新通知、活动和公开网络信息" },
+  { key: "agent", label: "Agent 能力", description: "读取授权目录；写入和命令执行仍需确认" },
+];
 
 // ===== 本地会话持久化 =====
 
@@ -29,6 +62,18 @@ type ConversationSummary = {
 };
 
 const STORAGE_KEY = "campus-ai-conversations";
+const CAPABILITIES_KEY = "campus-ai-capabilities";
+
+function loadCapabilities(): AssistantCapabilities {
+  if (typeof window === "undefined") return { ...DEFAULT_CAPABILITIES };
+  try {
+    return normalizeCapabilities(
+      JSON.parse(window.localStorage.getItem(CAPABILITIES_KEY) ?? "null"),
+    );
+  } catch {
+    return { ...DEFAULT_CAPABILITIES };
+  }
+}
 
 // 空状态建议问题（含卡片柔和色）
 const SUGGESTIONS = [
@@ -160,6 +205,11 @@ export default function Home() {
   const [skipIntro, setSkipIntro] = useState(false);
   const [darkMode, setDarkMode] = useState<"auto" | "light" | "dark">("auto");
   const [themeColor, setThemeColor] = useState("blue");
+  const [capabilities, setCapabilities] = useState<AssistantCapabilities>({
+    ...DEFAULT_CAPABILITIES,
+  });
+  const [authorizedDirs, setAuthorizedDirs] = useState<string[]>([]);
+  const [showAddDirectory, setShowAddDirectory] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -180,12 +230,20 @@ export default function Home() {
 
   // 读取设置偏好
   useEffect(() => {
+    // localStorage 是外部状态源，仅在首次挂载时同步一次。
+    /* eslint-disable react-hooks/set-state-in-effect */
     const s = localStorage.getItem("campus-skip-intro");
-    if (s === "true") setSkipIntro(true);
+    if (s === "true") {
+      setSkipIntro(true);
+      setShowLanding(false);
+    }
     const d = (localStorage.getItem("campus-dark-mode") || "auto") as "auto" | "light" | "dark";
     setDarkMode(d);
     const c = localStorage.getItem("campus-theme-color") || "blue";
     setThemeColor(c);
+    setCapabilities(loadCapabilities());
+    setAuthorizedDirs(loadAuthorizedDirs());
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   // 持久化设置
@@ -201,6 +259,9 @@ export default function Home() {
     localStorage.setItem("campus-theme-color", themeColor);
     document.documentElement.setAttribute("data-theme-color", themeColor);
   }, [themeColor]);
+  useEffect(() => {
+    localStorage.setItem(CAPABILITIES_KEY, JSON.stringify(capabilities));
+  }, [capabilities]);
 
   // 同步 ref，避免 onFinish 闭包陈旧
   useEffect(() => {
@@ -281,10 +342,28 @@ export default function Home() {
     [],
   );
 
-  const { messages, sendMessage, status } = useChat<UIMessage>({
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/chat",
+        prepareSendMessagesRequest: ({ messages: nextMessages, body }) => ({
+          body: {
+            ...body,
+            messages: stripPendingApprovals(nextMessages),
+            capabilities,
+            authorizedDirectories: capabilities.agent ? authorizedDirs : [],
+          },
+        }),
+      }),
+    [authorizedDirs, capabilities],
+  );
+
+  const { messages, sendMessage, status, addToolApprovalResponse } = useChat<UIMessage>({
     id: activeId,
     messages: initialMessages,
-    transport: new TextStreamChatTransport({ api: "/api/chat" }),
+    transport,
+    sendAutomaticallyWhen: ({ messages: nextMessages }) =>
+      lastAssistantMessageIsCompleteWithApprovalResponses({ messages: nextMessages }),
     onFinish: ({ messages: finalMessages, isAbort, isError }) => {
       // 必须在此处落盘：流式过程中 messages.length 与末条消息 id 均不变，
       // 下方持久化 effect 的指纹不会变化，导致最终回复内容无法写入 localStorage
@@ -302,17 +381,13 @@ export default function Home() {
       if (isPlaceholder && finalMessages.length >= 2) {
         void summarizeConversation(convoId, finalMessages);
       }
-      // 导出生成：每次 assistant 回复完成后自动触发
-      const lastAssistant = [...finalMessages]
-        .reverse()
-        .find((m) => m.role === "assistant");
-      if (lastAssistant) {
-        void generateExportsForMessage(lastAssistant.id, finalMessages);
-      }
+      // 导出文件改为用户主动点击后生成，避免每轮额外调用一次模型。
     },
   });
 
   const isLoading = status === "submitted" || status === "streaming";
+  const hasPendingApproval = messages.some(hasPendingApprovals);
+  const capabilityControlsDisabled = isLoading || hasPendingApproval;
 
   // 消息变化时滚动到底部
   useEffect(() => {
@@ -364,7 +439,6 @@ export default function Home() {
       ];
     }
     saveConversations(merged);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setConversations(merged);
     // 故意不依赖 conversations；用 ref 读取最新值，指纹变化才重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -587,6 +661,48 @@ export default function Home() {
               );
             })}
           </div>
+          {capabilities.agent && (
+            <div className="border-t border-border px-4 py-3">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-xs font-medium text-foreground/70">🔐 授权目录</span>
+                <button
+                  type="button"
+                  onClick={() => setShowAddDirectory((visible) => !visible)}
+                  className="text-xs text-primary-600 hover:text-primary-500"
+                >
+                  {showAddDirectory ? "取消" : "+ 添加"}
+                </button>
+              </div>
+              {authorizedDirs.length === 0 ? (
+                <p className="text-[11px] text-foreground/40">未授权目录，AI 暂无法读取本地文件</p>
+              ) : (
+                <div className="max-h-28 space-y-1 overflow-y-auto">
+                  {authorizedDirs.map((directory) => (
+                    <div key={directory} className="flex items-center gap-1 text-[11px] text-foreground/70">
+                      <span className="flex-1 truncate" title={directory}>{directory}</span>
+                      <button
+                        type="button"
+                        onClick={() => setAuthorizedDirs(removeAuthorizedDirectory(directory))}
+                        className="px-0.5 text-foreground/40 hover:text-danger"
+                        aria-label={`移除授权目录 ${directory}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {showAddDirectory && (
+                <DirectoryAuthCard
+                  onAllow={(directory) => {
+                    setAuthorizedDirs(addAuthorizedDirectory(directory));
+                    setShowAddDirectory(false);
+                  }}
+                  onCancel={() => setShowAddDirectory(false)}
+                />
+              )}
+            </div>
+          )}
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
@@ -674,6 +790,7 @@ export default function Home() {
             const files = getMessageFiles(m);
             const exportsForThis = exportsByMessage[m.id] ?? [];
             const isExportBusy = exportBusy.has(m.id);
+            const pendingApprovals = getPendingApprovals(m);
             return (
               <div
                 key={m.id}
@@ -725,6 +842,25 @@ export default function Home() {
                   )}
                 </div>
 
+                {m.role === "assistant" && pendingApprovals.length > 0 && (
+                  <div className="ml-10 mt-2 flex flex-col gap-2">
+                    {pendingApprovals.map((approval) => (
+                      <ToolApprovalCard
+                        key={approval.approvalId || approval.toolCallId}
+                        toolName={approval.toolName}
+                        summary={summarizeApproval(approval)}
+                        onRespond={(approved) =>
+                          addToolApprovalResponse({
+                            id: approval.approvalId,
+                            approved,
+                            reason: approved ? "用户在界面确认" : "用户拒绝",
+                          })
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+
                 {/* AI 回复：AI 生成的导出文件卡片（代码块下载按钮已内置在 MarkdownRenderer 里） */}
                 {m.role === "assistant" && exportsForThis.length > 0 && (
                   <div className="ml-10 mt-2 flex flex-wrap gap-2">
@@ -759,7 +895,7 @@ export default function Home() {
                   <span className="w-1.5 h-1.5 bg-primary-400 rounded-full thinking-dot [animation-delay:150ms]" />
                   <span className="w-1.5 h-1.5 bg-primary-400 rounded-full thinking-dot [animation-delay:300ms]" />
                 </div>
-                <span className="text-xs text-foreground/60">正在检索校园知识库…</span>
+                <span className="text-xs text-foreground/60">AI 正在处理…</span>
               </div>
             </div>
           )}
@@ -871,6 +1007,40 @@ export default function Home() {
               <button type="button" onClick={() => setSettingsOpen(false)} className="text-foreground/60 hover:text-foreground text-lg leading-none">&times;</button>
             </div>
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+              <div>
+                <label className="mb-2 block text-xs font-medium text-foreground/70">AI 能力边界</label>
+                <div className="space-y-2">
+                  {CAPABILITY_OPTIONS.map((option) => (
+                    <label
+                      key={option.key}
+                      className={`flex items-start gap-3 rounded-lg border border-border px-3 py-2.5 ${
+                        capabilityControlsDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={capabilities[option.key]}
+                        disabled={capabilityControlsDisabled}
+                        onChange={(event) =>
+                          setCapabilities((current) => ({
+                            ...current,
+                            [option.key]: event.target.checked,
+                          }))
+                        }
+                        className="mt-0.5 h-4 w-4 rounded border-border accent-primary-600"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-foreground/80">{option.label}</span>
+                        <span className="mt-0.5 block text-[11px] leading-4 text-foreground/45">{option.description}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] leading-4 text-foreground/40">
+                  关闭的能力不会发送给模型，也不会在服务端注册对应工具。
+                  {capabilityControlsDisabled ? " 请等待当前操作结束后再修改。" : ""}
+                </p>
+              </div>
               {/* 开场动画 */}
               <div>
                 <label className="text-xs font-medium text-foreground/70 mb-2 block">开场动画</label>
