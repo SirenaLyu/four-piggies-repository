@@ -118,14 +118,16 @@ test("支持按数据集设置独立最低分数", () => {
 test("知识库缓存键隔离数据集和检索配置", () => {
   const config = { baseUrl: "https://dify.example", datasetIds: ["a"] };
   const first = buildKnowledgeCacheKey("同一问题", config, {
+    NODE_ENV: "test",
     DIFY_RETRIEVAL_TOP_K: "5",
   } as NodeJS.ProcessEnv);
   const changedDataset = buildKnowledgeCacheKey(
     "同一问题",
     { ...config, datasetIds: ["b"] },
-    { DIFY_RETRIEVAL_TOP_K: "5" } as NodeJS.ProcessEnv,
+    { NODE_ENV: "test", DIFY_RETRIEVAL_TOP_K: "5" } as NodeJS.ProcessEnv,
   );
   const changedModel = buildKnowledgeCacheKey("同一问题", config, {
+    NODE_ENV: "test",
     DIFY_RETRIEVAL_TOP_K: "8",
   } as NodeJS.ProcessEnv);
   assert.notEqual(first, changedDataset);

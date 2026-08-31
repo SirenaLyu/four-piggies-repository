@@ -4,7 +4,7 @@
 
 ## 1. 这是什么
 
-「科大精灵」是一个 Next.js 16（App Router）+ TypeScript 实现的校园 AI 助手网站。用户输入校园相关问题后，系统调用中科大 LLM 代理生成流式回答，并在需要时自动调用：
+「科大精灵」是一个 Next.js 16（App Router）+ TypeScript 实现的校园 AI 助手网站。用户输入校园相关问题后，系统调用 OpenAI 兼容对话 API（默认 DeepSeek）生成流式回答，并在需要时自动调用：
 
 1. `query_knowledge_base` —— 查询 Dify 知识库（学校政策、办事流程、人员信息、办公地点等文档）。
 2. `web_search` —— 通过 Dify 联网搜索工作流检索实时公开信息。
@@ -18,7 +18,7 @@
 - **能力边界开关**：三项能力可任意组合或全部关闭；关闭的工具不会在服务端注册。
 - **受控 Agent**：目录须同时通过客户端授权与服务端根目录校验，写入和命令执行须逐次批准。
 - **知识库检索**：并发检索 8 个 Dify 数据集，去重排序后作为上下文。
-- **联网搜索**：知识库未命中时转 Dify 联网工作流，返回真实搜索结果。
+- **联网搜索**：通过 Dify/SearXNG 检索实时公开信息，执行日期规范化、主题相关度排序、可信来源优先、域名去重和风险内容过滤。
 - **历史会话**：会话列表与消息保存在浏览器 `localStorage`，可切换、展开、删除。
 - **按需导出**：用户点击后才生成 Markdown / Word / PDF / 文本 / 代码文件，避免每轮额外调用模型。
 - **主题与外观**：浅色 / 深色 / 跟随系统，多套主题色可选。
@@ -28,7 +28,7 @@
 
 | 类别 | 选型 |
 | --- | --- |
-| 框架 | Next.js 16.2.12（App Router，Turbopack） |
+| 框架 | Next.js 16.3.3（App Router，Turbopack） |
 | UI | React 19.2.4 + Tailwind CSS 4 |
 | 语言 | TypeScript 5 |
 | AI | `ai` ^7.0.41、`@ai-sdk/openai` ^4.0.23、`@ai-sdk/react` ^4.0.44 |
@@ -46,13 +46,18 @@ four-piggies-repository/
 │   │   └── export/route.ts        # 回答导出文件生成
 │   ├── components/                # 落地页 / 动画 / Logo / Markdown 渲染
 │   ├── lib/
-│   │   ├── ai-clients.ts          # 科大 LLM 客户端与模型名
+│   │   ├── ai-clients.ts          # OpenAI 兼容客户端与模型名
 │   │   ├── dify-knowledge.ts      # Dify 知识库检索（多数据集并发）
+│   │   ├── official-search.ts      # 中国政府网政策文件库补充检索
+│   │   ├── search-policy.ts        # 联网查询改写、排序、去重与安全过滤
 │   │   ├── export.ts              # 导出文件前端下载
 │   │   ├── markdown.ts            # Markdown 工具
 │   │   └── parse-llm-json.ts      # LLM JSON 解析
 │   ├── layout.tsx / page.tsx / globals.css
 ├── public/                        # 静态资源
+├── scripts/
+│   ├── build-wokepaike-knowledge.mjs # 生成课程/培养方案/评课检索文档
+│   └── sync-wokepaike-dify.mjs       # Dify 增量同步、原位刷新和索引等待
 ├── .env.local                     # 本地环境变量（已 gitignore）
 ├── package.json
 └── start.bat                      # Windows 一键启动
@@ -64,9 +69,10 @@ four-piggies-repository/
 
 | 变量 | 说明 |
 | --- | --- |
-| `OPENAI_API_KEY` | 科大 LLM 代理的 API Key |
-| `OPENAI_BASE_URL` | 科大 LLM 代理地址，`https://api.llm.ustc.edu.cn/v1` |
-| `CHAT_MODEL` | 对话模型，不设时默认 `deepseek-v4-flash-ascend`（可选 `qwen-chat` / `qwen3.6-chat`） |
+| `OPENAI_API_KEY` | OpenAI 兼容对话 API Key |
+| `OPENAI_BASE_URL` | 对话 API 地址，默认配置示例为 `https://api.deepseek.com` |
+| `CHAT_MODEL` | 对话模型，不设时默认 `deepseek-v4-flash` |
+| `CHAT_FALLBACK_MODEL` | 可选备用模型；与主模型不同时才启用网络/超时降级 |
 | `DIFY_BASE_URL` | 自建 Dify 服务地址（结尾不带 `/v1`） |
 | `DIFY_KNOWLEDGE_API_KEY` | Dify 知识库 Dataset Key（`dataset-` 开头） |
 | `DATASET_IDS` | 8 个知识库数据集 ID，逗号分隔 |
@@ -78,6 +84,7 @@ four-piggies-repository/
 | `DIFY_DATASET_SCORE_THRESHOLDS` | 可选的每数据集最低分数 JSON，用于过滤库内低相关片段 |
 | `DIFY_WORKFLOW_API_KEY` | 联网搜索工作流的 API Key（`app-` 开头） |
 | `DIFY_SEARCH_BLOCKED_DOMAINS` | 联网结果额外屏蔽的域名，英文逗号分隔 |
+| `WOKEPAIKE_DIFY_DATASET_ID` | 蜗壳排课同步脚本的目标知识库；不设时使用内置学校课程库 ID |
 | `AGENT_ALLOWED_ROOTS` | Agent 可访问的服务端根目录；浏览器授权只能在这些根目录内生效 |
 | `AGENT_ENABLE_COMMAND_EXECUTION` | 是否允许命令执行，默认 `false` |
 | `AGENT_ALLOWED_COMMANDS` | 可执行程序绝对路径白名单，多个用英文逗号分隔 |
@@ -113,13 +120,33 @@ npm run dev
 
 访问 <http://localhost:3000>。
 
+### 6.3 同步蜗壳排课数据到 Dify
+
+同步脚本从蜗壳排课项目的 `data/` 目录生成面向检索的课程、培养方案、课程替代关系和评课社区聚合评分文档。生成物和远端快照写入 `generated/`，该目录不会提交到 Git。
+
+```bash
+# 生成文档；参数一是蜗壳排课 data 目录，参数二是输出目录（均可省略）
+node scripts/build-wokepaike-knowledge.mjs "C:/path/to/wokepaike/data" generated/wokepaike-knowledge
+
+# 只读预检
+node scripts/sync-wokepaike-dify.mjs --serial
+
+# 增量上传，并逐份等待索引完成
+node scripts/sync-wokepaike-dify.mjs --upload --serial
+
+# 数据变化后原位刷新课程类文档
+node scripts/sync-wokepaike-dify.mjs --upload --serial --refresh-category=courses
+```
+
+脚本读取 `DIFY_BASE_URL`、`DIFY_KNOWLEDGE_API_KEY` 和可选的 `WOKEPAIKE_DIFY_DATASET_ID`。批量索引采用可恢复的串行模式，避免同时提交大量文档压满 Dify 数据库连接池或嵌入服务。
+
 ## 7. 核心实现
 
 ### 7.1 `/api/chat` 流式对话
 
 `app/api/chat/route.ts` 使用 `streamText`：
 
-- 模型：`chatClient.chat(CHAT_MODEL)`（科大 LLM 代理）。
+- 模型：`chatClient.chat(CHAT_MODEL)`（OpenAI 兼容接口，默认 `deepseek-v4-flash`）。
 - 工具：根据客户端能力开关动态注册知识库、联网搜索和 Agent 文件工具。
 - 步数上限：普通问答最多 4 步；Agent 模式最多 7 步以容纳多次文件操作，最后一步统一关闭工具并生成最终答案。
 - 输出：AI SDK UI message stream，可携带文本、工具调用和审批请求。
@@ -142,10 +169,11 @@ npm run dev
 
 `web_search` 工具调用 Dify 工作流 `POST {DIFY_BASE_URL}/v1/workflows/run`：
 
-- 天气查询保留用户原问题并补充绝对日期、完整天气字段和官方气象来源；校园查询优先限定 `ustc.edu.cn`。
+- 时间敏感查询补充上海时区绝对日期；校园查询展开学校别名，天气查询补充地点、完整字段和本地气象台关键词。
 - 每轮最多执行 2 次联网搜索，达到预算后从模型可用工具中移除 `web_search`。
-- 传入 `inputs: { query }`，`response_mode: "blocking"`，并对 `data.outputs.result` 做风险内容、低质量域名和提示词注入过滤。
-- 校园、天气、政府和教育域名按可信度优先排序，送入模型的结果最多 12000 字符。
+- 传入 `inputs: { query }`，`response_mode: "blocking"`，并对 `data.outputs.result` 做风险内容、低质量域名、提示词注入、主题相关度、日期和地点一致性过滤。
+- 校园、天气、政府和教育域名按可信度优先；对同域名设上限并按内容指纹去重，避免单一来源垄断上下文。
+- 国务院政策类查询并行补充中国政府网政策文件库；只有有实质证据的结果才进入 2 分钟短缓存。
 - 工作流内部使用 SearXNG 搜索并整理成 Markdown。
 - 浏览器断开连接时会同步取消模型、Dify Workflow 和知识库请求，避免后台继续消耗资源。
 
@@ -164,7 +192,7 @@ npm run dev
 
 - 知识库能答得多好取决于数据集里是否收录了对应文档。
 - 全网搜索容易命中"他校邀请中科大教授"之类内容，模型会诚实说明并给建议。
-- 科大 LLM 代理在不同时段的响应延迟波动较大，慢时可切换 `CHAT_MODEL`。
+- 对话 API、Dify、搜索引擎和嵌入服务均可能出现限流或延迟波动，应结合日志与监控判断故障位置。
 - 联网结果过滤是应用层兜底；仍建议在 Dify/SearXNG 工作流中开启 SafeSearch，并维护搜索引擎侧黑名单。
 
 ## 9. 分支关系

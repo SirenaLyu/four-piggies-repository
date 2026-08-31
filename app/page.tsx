@@ -197,6 +197,8 @@ export default function Home() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("chat") === "1" || params.get("enter") === "1") {
+      // URL 查询参数是浏览器外部状态，只在首次挂载时同步一次。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowLanding(false);
     }
   }, []);

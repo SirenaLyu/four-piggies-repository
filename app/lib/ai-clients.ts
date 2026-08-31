@@ -1,7 +1,7 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { wrapLanguageModel } from "ai";
 
-// chatClient: 科大 API，用于最终回答问题、生成标题、生成导出文件
+// chatClient: OpenAI 兼容对话 API，用于最终回答问题、生成标题、生成导出文件
 export const chatClient = createOpenAI({
   baseURL: process.env.OPENAI_BASE_URL,
   apiKey: process.env.OPENAI_API_KEY,
@@ -17,14 +17,12 @@ export const embeddingClient = createOpenAI({
 
 export const EMBEDDING_MODEL = "BAAI/bge-m3";
 
-// 对话模型：可通过环境变量 CHAT_MODEL 随时切换
-// 学校代理可用模型实测：deepseek-v4-flash-ascend / qwen-chat / qwen3.6-chat 等
-// （同一模型在不同时段首 token 延迟波动极大，慢时可切换试试）
-export const CHAT_MODEL = process.env.CHAT_MODEL?.trim() || "deepseek-v4-flash-ascend";
+// 对话模型：默认使用 DeepSeek API，也可通过 CHAT_MODEL 随时切换。
+export const CHAT_MODEL = process.env.CHAT_MODEL?.trim() || "deepseek-v4-flash";
 
-// 备用模型：主模型网络/超时失败时自动降级
+// 备用模型：未显式配置时与主模型一致，即不做跨模型降级。
 export const CHAT_FALLBACK_MODEL =
-  process.env.CHAT_FALLBACK_MODEL?.trim() || "qwen-chat";
+  process.env.CHAT_FALLBACK_MODEL?.trim() || CHAT_MODEL;
 
 /** 判断是否为网络/超时类错误（这类错误换一个模型重试才有意义） */
 function isNetworkOrTimeoutError(error: unknown): boolean {
@@ -37,7 +35,7 @@ function isNetworkOrTimeoutError(error: unknown): boolean {
 
 /**
  * 带降级能力的对话模型：
- * 主模型（deepseek）网络/超时失败时，自动切换到备用模型（qwen）。
+ * 主模型网络/超时失败时，仅在配置了不同备用模型的情况下自动降级。
  */
 export const chatModel = wrapLanguageModel({
   model: chatClient.chat(CHAT_MODEL),
@@ -47,7 +45,10 @@ export const chatModel = wrapLanguageModel({
       try {
         return await doStream();
       } catch (error) {
-        if (isNetworkOrTimeoutError(error)) {
+        if (
+          CHAT_FALLBACK_MODEL !== CHAT_MODEL &&
+          isNetworkOrTimeoutError(error)
+        ) {
           console.warn(
             `[model] 主模型调用失败，降级到 ${CHAT_FALLBACK_MODEL}：${
               (error as Error).message
@@ -62,7 +63,10 @@ export const chatModel = wrapLanguageModel({
       try {
         return await doGenerate();
       } catch (error) {
-        if (isNetworkOrTimeoutError(error)) {
+        if (
+          CHAT_FALLBACK_MODEL !== CHAT_MODEL &&
+          isNetworkOrTimeoutError(error)
+        ) {
           console.warn(
             `[model] 主模型调用失败，降级到 ${CHAT_FALLBACK_MODEL}：${
               (error as Error).message
