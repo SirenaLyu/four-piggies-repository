@@ -192,6 +192,15 @@ export default function Home() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [showLanding, setShowLanding] = useState(true);
   const handleEnter = useCallback(() => setShowLanding(false), []);
+
+  // 支持 URL 参数 ?chat=1 直接进入聊天页（便于快速测试）
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("chat") === "1" || params.get("enter") === "1") {
+      setShowLanding(false);
+    }
+  }, []);
+
   const [activeId, setActiveId] = useState<string>(() => generateChatId());
   const [hydrated, setHydrated] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<FileUIPart[]>([]);
