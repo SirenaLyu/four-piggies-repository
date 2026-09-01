@@ -120,6 +120,33 @@ function matchFirst(html, patterns, fieldName) {
   throw new Error(`文章缺少 ${fieldName}`);
 }
 
+function normalizeArticleUrl(sourceUrl) {
+  const canonicalUrl = new URL(sourceUrl);
+  canonicalUrl.protocol = "https:";
+  canonicalUrl.hash = "";
+
+  if (/^\/s\/[A-Za-z0-9_-]+$/.test(canonicalUrl.pathname)) {
+    canonicalUrl.search = "";
+  } else if (canonicalUrl.pathname === "/s") {
+    const stableParams = ["__biz", "mid", "idx", "sn", "chksm"];
+    const values = stableParams
+      .map((key) => [key, canonicalUrl.searchParams.get(key)])
+      .filter(([, value]) => value);
+    canonicalUrl.search = "";
+    for (const [key, value] of values) canonicalUrl.searchParams.set(key, value);
+  }
+
+  return canonicalUrl.toString();
+}
+
+function extractPreviousArticleUrl(html) {
+  const match = html.match(/pre_article_link:\s*'([^']+)'/i);
+  if (!match) return null;
+  const decoded = decodeEntities(decodeJsString(match[1]));
+  if (!decoded.includes("mp.weixin.qq.com/s")) return null;
+  return normalizeArticleUrl(decoded);
+}
+
 function parseArticle(html, sourceUrl) {
   const title = matchFirst(
     html,
@@ -158,11 +185,9 @@ function parseArticle(html, sourceUrl) {
 
   const publishedAt = new Date(timestamp * 1000);
   const publishedDate = publishedAt.toISOString().slice(0, 10);
-  const canonicalUrl = new URL(sourceUrl);
-  canonicalUrl.search = "";
-  canonicalUrl.hash = "";
+  const canonicalUrl = normalizeArticleUrl(sourceUrl);
   const sourceHash = createHash("sha256")
-    .update(canonicalUrl.toString())
+    .update(canonicalUrl)
     .digest("hex")
     .slice(0, 12);
 
@@ -173,7 +198,7 @@ function parseArticle(html, sourceUrl) {
     publishedAt: publishedAt.toISOString(),
     publishedDate,
     sourceHash,
-    sourceUrl: canonicalUrl.toString(),
+    sourceUrl: canonicalUrl,
     title,
   };
 }
@@ -390,7 +415,12 @@ async function main() {
   await mkdir(args.outputDir, { recursive: true });
 
   const articles = [];
-  for (const url of urls) {
+  const queue = [...urls];
+  const seenUrls = new Set();
+  while (queue.length > 0) {
+    const url = normalizeArticleUrl(queue.shift());
+    if (seenUrls.has(url)) continue;
+    seenUrls.add(url);
     console.log(`抓取: ${url}`);
     const html = await fetchArticleWithCache(url, args.outputDir);
     const article = parseArticle(html, url);
@@ -398,7 +428,19 @@ async function main() {
     await writeFile(path.join(args.outputDir, fileName), articleToMarkdown(article), "utf8");
     articles.push(article);
     console.log(`已核验: ${article.title}（${article.body.length} 字符）`);
+
+    const previousUrl = extractPreviousArticleUrl(html);
+    if (previousUrl && !seenUrls.has(previousUrl)) {
+      console.log(`发现上一篇: ${previousUrl}`);
+      queue.push(previousUrl);
+    }
   }
+
+  await writeFile(
+    path.join(args.outputDir, "discovered-urls.txt"),
+    `${articles.map((article) => article.sourceUrl).join("\n")}\n`,
+    "utf8",
+  );
 
   await writeFile(
     path.join(args.outputDir, "manifest.json"),
