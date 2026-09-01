@@ -361,6 +361,10 @@ async function findOrCreateDataset(baseUrl, apiKey) {
   });
 }
 
+function documentIdentity(name) {
+  return name.replace(/-[0-9a-f]{12}$/i, "").replace(/\s+/g, " ").trim();
+}
+
 async function listDocumentNames(baseUrl, apiKey, datasetId) {
   const names = new Set();
   let page = 1;
@@ -380,12 +384,15 @@ async function listDocumentNames(baseUrl, apiKey, datasetId) {
 async function uploadArticles(baseUrl, apiKey, articles) {
   const dataset = await findOrCreateDataset(baseUrl, apiKey);
   const existingNames = await listDocumentNames(baseUrl, apiKey, dataset.id);
+  const existingIdentities = new Set([...existingNames].map(documentIdentity));
   let uploaded = 0;
   let skipped = 0;
 
   for (const article of articles) {
-    const name = `微信-${article.accountName}-${article.publishedDate}-${article.title}-${article.sourceHash}`;
-    if (existingNames.has(name)) {
+    const normalizedTitle = article.title.replace(/\s+/g, " ").trim();
+    const name = `微信-${article.accountName}-${article.publishedDate}-${normalizedTitle}-${article.sourceHash}`;
+    const identity = documentIdentity(name);
+    if (existingNames.has(name) || existingIdentities.has(identity)) {
       console.log(`跳过已存在文档: ${name}`);
       skipped += 1;
       continue;
@@ -402,6 +409,8 @@ async function uploadArticles(baseUrl, apiKey, articles) {
       }),
     });
     console.log(`已上传: ${name}`);
+    existingNames.add(name);
+    existingIdentities.add(identity);
     uploaded += 1;
   }
 
@@ -415,6 +424,7 @@ async function main() {
   await mkdir(args.outputDir, { recursive: true });
 
   const articles = [];
+  const failures = [];
   const queue = [...urls];
   const seenUrls = new Set();
   while (queue.length > 0) {
@@ -422,8 +432,17 @@ async function main() {
     if (seenUrls.has(url)) continue;
     seenUrls.add(url);
     console.log(`抓取: ${url}`);
-    const html = await fetchArticleWithCache(url, args.outputDir);
-    const article = parseArticle(html, url);
+    let html;
+    let article;
+    try {
+      html = await fetchArticleWithCache(url, args.outputDir);
+      article = parseArticle(html, url);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push({ url, message });
+      console.warn(message);
+      continue;
+    }
     const fileName = `${article.publishedDate}-${safeFileName(article.title)}-${article.sourceHash}.md`;
     await writeFile(path.join(args.outputDir, fileName), articleToMarkdown(article), "utf8");
     articles.push(article);
@@ -439,6 +458,12 @@ async function main() {
   await writeFile(
     path.join(args.outputDir, "discovered-urls.txt"),
     `${articles.map((article) => article.sourceUrl).join("\n")}\n`,
+    "utf8",
+  );
+
+  await writeFile(
+    path.join(args.outputDir, "failed-urls.json"),
+    `${JSON.stringify(failures, null, 2)}\n`,
     "utf8",
   );
 
@@ -463,6 +488,9 @@ async function main() {
   console.log(
     `Dify 同步完成：知识库 ${result.datasetId}，新增 ${result.uploaded}，跳过 ${result.skipped}。`,
   );
+  if (failures.length > 0) {
+    console.warn(`另有 ${failures.length} 条链接抓取失败，已记录到 failed-urls.json，可稍后重试。`);
+  }
 }
 
 main().catch((error) => {

@@ -20,6 +20,7 @@
 # production
 /build
 /generated/
+/data/keda-jijian/
 
 # misc
 .DS_Store
