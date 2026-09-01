@@ -2,17 +2,33 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const ACCOUNT_NAME = "科大基建";
-const ACCOUNT_USERNAME = "gh_390f41ff9360";
-const DATASET_NAME = "公众号-科大基建";
-const DEFAULT_URLS_FILE = path.join("scripts", "keda-jijian-urls.txt");
-const DEFAULT_OUTPUT_DIR = path.join("data", "keda-jijian");
+const ACCOUNTS = {
+  "keda-jijian": {
+    name: "科大基建",
+    username: "gh_390f41ff9360",
+    datasetName: "公众号-科大基建",
+    description:
+      "中国科学技术大学“科大基建”微信公众号公开文章，包含校园维修、缴费、基建服务与使用指南。",
+    urlsFile: path.join("scripts", "keda-jijian-urls.txt"),
+    outputDir: path.join("data", "keda-jijian"),
+  },
+  ustc: {
+    name: "中国科学技术大学",
+    username: "gh_f8a2dde85dab",
+    datasetName: "公众号-中国科学技术大学",
+    description:
+      "中国科学技术大学官方微信公众号公开文章，包含学校新闻、科研进展、校园活动与招生信息。",
+    urlsFile: path.join("scripts", "ustc-wechat-urls.txt"),
+    outputDir: path.join("data", "ustc-wechat"),
+  },
+};
 
 function parseArgs(argv) {
   const args = {
+    account: "keda-jijian",
     envFile: ".env.local",
-    urlsFile: DEFAULT_URLS_FILE,
-    outputDir: DEFAULT_OUTPUT_DIR,
+    urlsFile: null,
+    outputDir: null,
     upload: false,
   };
 
@@ -20,6 +36,8 @@ function parseArgs(argv) {
     const value = argv[index];
     if (value === "--upload") {
       args.upload = true;
+    } else if (value === "--account") {
+      args.account = argv[++index];
     } else if (value === "--env-file") {
       args.envFile = argv[++index];
     } else if (value === "--urls-file") {
@@ -31,6 +49,7 @@ function parseArgs(argv) {
         [
           "用法: node scripts/sync-wechat-keda-jijian.mjs [选项]",
           "",
+          "  --account <name>     账号配置：keda-jijian 或 ustc",
           "  --urls-file <path>   公众号文章链接清单",
           "  --output-dir <path>  Markdown 和抓取清单输出目录",
           "  --env-file <path>    含 DIFY_BASE_URL、DIFY_KNOWLEDGE_API_KEY 的环境文件",
@@ -42,6 +61,12 @@ function parseArgs(argv) {
       throw new Error(`未知参数: ${value}`);
     }
   }
+
+  const account = ACCOUNTS[args.account];
+  if (!account) throw new Error(`未知账号配置: ${args.account}`);
+  args.urlsFile ??= account.urlsFile;
+  args.outputDir ??= account.outputDir;
+  args.accountConfig = account;
 
   return args;
 }
@@ -147,7 +172,7 @@ function extractPreviousArticleUrl(html) {
   return normalizeArticleUrl(decoded);
 }
 
-function parseArticle(html, sourceUrl) {
+function parseArticle(html, sourceUrl, account) {
   const title = matchFirst(
     html,
     [
@@ -174,9 +199,9 @@ function parseArticle(html, sourceUrl) {
   );
   if (!contentMatch) throw new Error("文章缺少可解析的正文");
 
-  if (nickname !== ACCOUNT_NAME || username !== ACCOUNT_USERNAME) {
+  if (nickname !== account.name || username !== account.username) {
     throw new Error(
-      `账号校验失败，期望 ${ACCOUNT_NAME}/${ACCOUNT_USERNAME}，实际 ${nickname}/${username}`,
+      `账号校验失败，期望 ${account.name}/${account.username}，实际 ${nickname}/${username}`,
     );
   }
 
@@ -340,18 +365,19 @@ async function difyRequest(baseUrl, apiKey, endpoint, options = {}) {
   return data;
 }
 
-async function findOrCreateDataset(baseUrl, apiKey) {
+async function findOrCreateDataset(baseUrl, apiKey, account) {
   const listing = await difyRequest(baseUrl, apiKey, "/v1/datasets?page=1&limit=100");
-  const matches = (listing.data ?? []).filter((dataset) => dataset.name === DATASET_NAME);
-  if (matches.length > 1) throw new Error(`发现多个同名知识库: ${DATASET_NAME}`);
+  const matches = (listing.data ?? []).filter(
+    (dataset) => dataset.name === account.datasetName,
+  );
+  if (matches.length > 1) throw new Error(`发现多个同名知识库: ${account.datasetName}`);
   if (matches.length === 1) return matches[0];
 
   return difyRequest(baseUrl, apiKey, "/v1/datasets", {
     method: "POST",
     body: JSON.stringify({
-      name: DATASET_NAME,
-      description:
-        "中国科学技术大学“科大基建”微信公众号公开文章，包含校园维修、缴费、基建服务与使用指南。",
+      name: account.datasetName,
+      description: account.description,
       permission: "all_team_members",
       indexing_technique: "high_quality",
       provider: "vendor",
@@ -381,8 +407,8 @@ async function listDocumentNames(baseUrl, apiKey, datasetId) {
   return names;
 }
 
-async function uploadArticles(baseUrl, apiKey, articles) {
-  const dataset = await findOrCreateDataset(baseUrl, apiKey);
+async function uploadArticles(baseUrl, apiKey, articles, account) {
+  const dataset = await findOrCreateDataset(baseUrl, apiKey, account);
   const existingNames = await listDocumentNames(baseUrl, apiKey, dataset.id);
   const existingIdentities = new Set([...existingNames].map(documentIdentity));
   let uploaded = 0;
@@ -436,7 +462,7 @@ async function main() {
     let article;
     try {
       html = await fetchArticleWithCache(url, args.outputDir);
-      article = parseArticle(html, url);
+      article = parseArticle(html, url, args.accountConfig);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       failures.push({ url, message });
@@ -484,7 +510,7 @@ async function main() {
   if (!baseUrl || !apiKey) {
     throw new Error("缺少 DIFY_BASE_URL 或 DIFY_KNOWLEDGE_API_KEY");
   }
-  const result = await uploadArticles(baseUrl, apiKey, articles);
+  const result = await uploadArticles(baseUrl, apiKey, articles, args.accountConfig);
   console.log(
     `Dify 同步完成：知识库 ${result.datasetId}，新增 ${result.uploaded}，跳过 ${result.skipped}。`,
   );

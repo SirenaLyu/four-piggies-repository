@@ -21,6 +21,7 @@
 /build
 /generated/
 /data/keda-jijian/
+/data/ustc-wechat/
 
 # misc
 .DS_Store

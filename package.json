@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --test --no-warnings",
-    "sync:keda-jijian": "node scripts/sync-wechat-keda-jijian.mjs"
+    "sync:keda-jijian": "node scripts/sync-wechat-keda-jijian.mjs --account keda-jijian",
+    "sync:ustc-wechat": "node scripts/sync-wechat-keda-jijian.mjs --account ustc"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.23",
