@@ -33,6 +33,13 @@ import {
   normalizeCapabilities,
   type AssistantCapabilities,
 } from "./lib/capabilities";
+import {
+  buildPersonalizedSuggestions,
+  EMPTY_USER_PROFILE,
+  isCompleteUserProfile,
+  normalizeUserProfile,
+  type UserProfile,
+} from "./lib/user-profile";
 
 // ===== 主题色预设 =====
 const THEME_COLORS = [
@@ -63,6 +70,12 @@ type ConversationSummary = {
 
 const STORAGE_KEY = "campus-ai-conversations";
 const CAPABILITIES_KEY = "campus-ai-capabilities";
+const USER_PROFILE_KEY = "campus-ai-user-profile";
+
+type UserProfileDraft = {
+  age: string;
+  major: string;
+};
 
 function loadCapabilities(): AssistantCapabilities {
   if (typeof window === "undefined") return { ...DEFAULT_CAPABILITIES };
@@ -75,15 +88,21 @@ function loadCapabilities(): AssistantCapabilities {
   }
 }
 
-// 空状态建议问题（含卡片柔和色）
-const SUGGESTIONS = [
-  { text: "食堂有哪些？", color: "#fdf0e3" },
-  { text: "课程怎么选？", color: "#e8f0fb" },
-  { text: "图书馆开放时间？", color: "#e8f5ec" },
-  { text: "社团活动怎么加入？", color: "#f0edfb" },
-  { text: "自习室在哪？", color: "#fdf6e3" },
-  { text: "教学日历", color: "#fdeef0" },
-];
+function loadUserProfile(): UserProfile {
+  if (typeof window === "undefined") return { ...EMPTY_USER_PROFILE };
+  try {
+    return normalizeUserProfile(
+      JSON.parse(window.localStorage.getItem(USER_PROFILE_KEY) ?? "null"),
+    );
+  } catch {
+    return { ...EMPTY_USER_PROFILE };
+  }
+}
+
+function saveUserProfile(profile: UserProfile) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(profile));
+}
 
 function loadConversations(): ConversationSummary[] {
   if (typeof window === "undefined") return [];
@@ -219,6 +238,15 @@ export default function Home() {
   const [capabilities, setCapabilities] = useState<AssistantCapabilities>({
     ...DEFAULT_CAPABILITIES,
   });
+  const [userProfile, setUserProfile] = useState<UserProfile>({
+    ...EMPTY_USER_PROFILE,
+  });
+  const [profileDraft, setProfileDraft] = useState<UserProfileDraft>({
+    age: "",
+    major: "",
+  });
+  const [profilePromptOpen, setProfilePromptOpen] = useState(false);
+  const [profileError, setProfileError] = useState("");
   const [authorizedDirs, setAuthorizedDirs] = useState<string[]>([]);
   const [showAddDirectory, setShowAddDirectory] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -254,6 +282,13 @@ export default function Home() {
     setThemeColor(c);
     setCapabilities(loadCapabilities());
     setAuthorizedDirs(loadAuthorizedDirs());
+    const storedProfile = loadUserProfile();
+    setUserProfile(storedProfile);
+    setProfileDraft({
+      age: storedProfile.age?.toString() ?? "",
+      major: storedProfile.major,
+    });
+    setProfilePromptOpen(!isCompleteUserProfile(storedProfile));
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
@@ -362,11 +397,12 @@ export default function Home() {
             ...body,
             messages: stripPendingApprovals(nextMessages),
             capabilities,
+            userProfile,
             authorizedDirectories: capabilities.agent ? authorizedDirs : [],
           },
         }),
       }),
-    [authorizedDirs, capabilities],
+    [authorizedDirs, capabilities, userProfile],
   );
 
   const { messages, sendMessage, status, addToolApprovalResponse } = useChat<UIMessage>({
@@ -550,6 +586,33 @@ export default function Home() {
   };
 
   const [input, setInput] = useState("");
+  const suggestions = useMemo(
+    () => buildPersonalizedSuggestions(userProfile),
+    [userProfile],
+  );
+
+  const openSettings = () => {
+    setProfileDraft({
+      age: userProfile.age?.toString() ?? "",
+      major: userProfile.major,
+    });
+    setProfileError("");
+    setSettingsOpen(true);
+  };
+
+  const commitUserProfile = () => {
+    const normalized = normalizeUserProfile(profileDraft);
+    if (!isCompleteUserProfile(normalized)) {
+      setProfileError("请填写 10–100 岁之间的整数年龄和专业名称。");
+      return false;
+    }
+    setUserProfile(normalized);
+    setProfileDraft({ age: String(normalized.age), major: normalized.major });
+    saveUserProfile(normalized);
+    setProfileError("");
+    setProfilePromptOpen(false);
+    return true;
+  };
 
   // ===== 渲染 =====
 
@@ -763,7 +826,7 @@ export default function Home() {
             </button>
             <button
               type="button"
-              onClick={() => setSettingsOpen(true)}
+              onClick={openSettings}
               className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition-colors"
               title="设置"
             >
@@ -782,8 +845,17 @@ export default function Home() {
               <Logo size={64} className="mb-4" />
               <h2 className="text-xl font-semibold text-foreground">你好！我是科大精灵</h2>
               <p className="text-sm text-foreground/60 mt-2">有什么关于学校的问题都可以问我</p>
+              {isCompleteUserProfile(userProfile) && (
+                <button
+                  type="button"
+                  onClick={openSettings}
+                  className="mt-3 rounded-full border border-primary-200 bg-primary-50 px-3 py-1 text-xs text-primary-700 transition-colors hover:bg-primary-100"
+                >
+                  已按 {userProfile.age} 岁 · {userProfile.major} 定制
+                </button>
+              )}
               <div className="columns-2 gap-3 mt-8 w-[430px] max-w-full">
-                {SUGGESTIONS.map((s) => (
+                {suggestions.map((s) => (
                   <button
                     key={s.text}
                     onClick={() => handleSuggestion(s.text)}
@@ -1018,6 +1090,62 @@ export default function Home() {
               <button type="button" onClick={() => setSettingsOpen(false)} className="text-foreground/60 hover:text-foreground text-lg leading-none">&times;</button>
             </div>
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  commitUserProfile();
+                }}
+              >
+                <label className="mb-2 block text-xs font-medium text-foreground/70">
+                  个人资料
+                </label>
+                <div className="grid grid-cols-[92px_1fr] gap-2">
+                  <input
+                    type="number"
+                    min={10}
+                    max={100}
+                    inputMode="numeric"
+                    value={profileDraft.age}
+                    onChange={(event) =>
+                      setProfileDraft((current) => ({
+                        ...current,
+                        age: event.target.value,
+                      }))
+                    }
+                    placeholder="年龄"
+                    aria-label="年龄"
+                    className="rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none focus:border-primary-400"
+                  />
+                  <input
+                    type="text"
+                    maxLength={50}
+                    value={profileDraft.major}
+                    onChange={(event) =>
+                      setProfileDraft((current) => ({
+                        ...current,
+                        major: event.target.value,
+                      }))
+                    }
+                    placeholder="专业，如计算机科学"
+                    aria-label="专业"
+                    className="min-w-0 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none focus:border-primary-400"
+                  />
+                </div>
+                {profileError && (
+                  <p className="mt-2 text-[11px] text-danger">{profileError}</p>
+                )}
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <p className="text-[11px] leading-4 text-foreground/40">
+                    保存在当前浏览器，提问时用于定制回答。
+                  </p>
+                  <button
+                    type="submit"
+                    className="shrink-0 rounded-md bg-primary-600 px-3 py-1.5 text-xs text-white hover:bg-primary-500"
+                  >
+                    保存
+                  </button>
+                </div>
+              </form>
               <div>
                 <label className="mb-2 block text-xs font-medium text-foreground/70">AI 能力边界</label>
                 <div className="space-y-2">
@@ -1110,6 +1238,98 @@ export default function Home() {
             </div>
           </div>
         </>
+      )}
+
+      {profilePromptOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="profile-dialog-title"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-4"
+        >
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              commitUserProfile();
+            }}
+            className="w-full max-w-md rounded-3xl border border-border bg-surface p-6 shadow-2xl"
+          >
+            <div className="mb-5 flex items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary-600">
+                <Logo size={28} color="#FFFFFF" accent="#8FC0FF" />
+              </div>
+              <div>
+                <h2 id="profile-dialog-title" className="text-lg font-semibold text-foreground">
+                  先认识一下你
+                </h2>
+                <p className="mt-1 text-sm leading-5 text-foreground/55">
+                  填写年龄和专业后，我会为你调整问题推荐、讲解深度和校园建议。
+                </p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium text-foreground/70">年龄</span>
+                <input
+                  autoFocus
+                  type="number"
+                  min={10}
+                  max={100}
+                  inputMode="numeric"
+                  value={profileDraft.age}
+                  onChange={(event) =>
+                    setProfileDraft((current) => ({
+                      ...current,
+                      age: event.target.value,
+                    }))
+                  }
+                  placeholder="例如：20"
+                  className="w-full rounded-xl border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary-400"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium text-foreground/70">专业</span>
+                <input
+                  type="text"
+                  maxLength={50}
+                  value={profileDraft.major}
+                  onChange={(event) =>
+                    setProfileDraft((current) => ({
+                      ...current,
+                      major: event.target.value,
+                    }))
+                  }
+                  placeholder="例如：计算机科学与技术"
+                  className="w-full rounded-xl border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary-400"
+                />
+              </label>
+            </div>
+            {profileError && (
+              <p className="mt-3 text-xs text-danger">{profileError}</p>
+            )}
+            <p className="mt-4 text-[11px] leading-4 text-foreground/40">
+              资料保存在当前浏览器，提问时用于定制回答，可随时在设置中修改。
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setProfileError("");
+                  setProfilePromptOpen(false);
+                }}
+                className="rounded-lg px-4 py-2 text-sm text-foreground/60 hover:bg-muted"
+              >
+                稍后填写
+              </button>
+              <button
+                type="submit"
+                className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-500"
+              >
+                保存并开始
+              </button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   );
