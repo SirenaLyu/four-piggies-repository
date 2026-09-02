@@ -28,6 +28,7 @@ function parseArgs(argv) {
     account: "keda-jijian",
     envFile: ".env.local",
     urlsFile: null,
+    urls: [],
     outputDir: null,
     upload: false,
   };
@@ -42,6 +43,8 @@ function parseArgs(argv) {
       args.envFile = argv[++index];
     } else if (value === "--urls-file") {
       args.urlsFile = argv[++index];
+    } else if (value === "--url") {
+      args.urls.push(argv[++index]);
     } else if (value === "--output-dir") {
       args.outputDir = argv[++index];
     } else if (value === "--help" || value === "-h") {
@@ -51,6 +54,7 @@ function parseArgs(argv) {
           "",
           "  --account <name>     账号配置：keda-jijian 或 ustc",
           "  --urls-file <path>   公众号文章链接清单",
+          "  --url <url>          临时文章入口，可重复传入；传入后默认不读取链接清单",
           "  --output-dir <path>  Markdown 和抓取清单输出目录",
           "  --env-file <path>    含 DIFY_BASE_URL、DIFY_KNOWLEDGE_API_KEY 的环境文件",
           "  --upload             创建/复用 Dify 数据集并增量上传；省略时仅抓取",
@@ -64,7 +68,7 @@ function parseArgs(argv) {
 
   const account = ACCOUNTS[args.account];
   if (!account) throw new Error(`未知账号配置: ${args.account}`);
-  args.urlsFile ??= account.urlsFile;
+  if (!args.urlsFile && args.urls.length === 0) args.urlsFile = account.urlsFile;
   args.outputDir ??= account.outputDir;
   args.accountConfig = account;
 
@@ -157,19 +161,26 @@ function normalizeArticleUrl(sourceUrl) {
     const values = stableParams
       .map((key) => [key, canonicalUrl.searchParams.get(key)])
       .filter(([, value]) => value);
-    canonicalUrl.search = "";
-    for (const [key, value] of values) canonicalUrl.searchParams.set(key, value);
+    if (values.length > 0) {
+      canonicalUrl.search = "";
+      for (const [key, value] of values) canonicalUrl.searchParams.set(key, value);
+    }
   }
 
   return canonicalUrl.toString();
 }
 
-function extractPreviousArticleUrl(html) {
-  const match = html.match(/pre_article_link:\s*'([^']+)'/i);
-  if (!match) return null;
-  const decoded = decodeEntities(decodeJsString(match[1]));
-  if (!decoded.includes("mp.weixin.qq.com/s")) return null;
-  return normalizeArticleUrl(decoded);
+function extractAdjacentArticleUrls(html) {
+  return [
+    ["上一篇", /pre_article_link:\s*'([^']+)'/i],
+    ["下一篇", /next_article_link:\s*'([^']+)'/i],
+  ].flatMap(([label, pattern]) => {
+    const match = html.match(pattern);
+    if (!match) return [];
+    const decoded = decodeEntities(decodeJsString(match[1]));
+    if (!decoded.includes("mp.weixin.qq.com/s")) return [];
+    return [{ label, url: normalizeArticleUrl(decoded) }];
+  });
 }
 
 function parseArticle(html, sourceUrl, account) {
@@ -281,10 +292,16 @@ async function fetchArticle(url) {
   for (let attempt = 0; attempt < userAgents.length; attempt += 1) {
     try {
       const attemptUrl = new URL(parsedUrl);
-      attemptUrl.searchParams.set("nwr_flag", "1");
-      attemptUrl.searchParams.set("sync_attempt", String(attempt + 1));
+      const isSignedSearchUrl = attemptUrl.searchParams.has("signature");
+      if (!isSignedSearchUrl) {
+        attemptUrl.searchParams.set("nwr_flag", "1");
+        attemptUrl.searchParams.set("sync_attempt", String(attempt + 1));
+      }
       const response = await fetch(attemptUrl, {
-        headers: { "User-Agent": userAgents[attempt] },
+        headers: {
+          "User-Agent": userAgents[attempt],
+          ...(isSignedSearchUrl ? { Referer: "https://weixin.sogou.com/" } : {}),
+        },
         redirect: "follow",
         signal: AbortSignal.timeout(30_000),
       });
@@ -445,7 +462,8 @@ async function uploadArticles(baseUrl, apiKey, articles, account) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const urls = await loadUrls(args.urlsFile);
+  const fileUrls = args.urlsFile ? await loadUrls(args.urlsFile) : [];
+  const urls = [...new Set([...fileUrls, ...args.urls].map(normalizeArticleUrl))];
   if (urls.length === 0) throw new Error("链接清单为空");
   await mkdir(args.outputDir, { recursive: true });
 
@@ -474,10 +492,10 @@ async function main() {
     articles.push(article);
     console.log(`已核验: ${article.title}（${article.body.length} 字符）`);
 
-    const previousUrl = extractPreviousArticleUrl(html);
-    if (previousUrl && !seenUrls.has(previousUrl)) {
-      console.log(`发现上一篇: ${previousUrl}`);
-      queue.push(previousUrl);
+    for (const adjacent of extractAdjacentArticleUrls(html)) {
+      if (seenUrls.has(adjacent.url)) continue;
+      console.log(`发现${adjacent.label}: ${adjacent.url}`);
+      queue.push(adjacent.url);
     }
   }
 
