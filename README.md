@@ -72,6 +72,7 @@ four-piggies-repository/
 | `OPENAI_API_KEY` | OpenAI 兼容对话 API Key |
 | `OPENAI_BASE_URL` | 对话 API 地址，默认配置示例为 `https://api.deepseek.com` |
 | `CHAT_MODEL` | 对话模型，不设时默认 `deepseek-v4-flash` |
+| `CHAT_HISTORY_MESSAGES` | 送入模型的最近消息条数，默认 24、范围 6–50；不影响浏览器保存的完整记录 |
 | `CHAT_FALLBACK_MODEL` | 可选备用模型；与主模型不同时才启用网络/超时降级 |
 | `DIFY_BASE_URL` | 自建 Dify 服务地址（结尾不带 `/v1`） |
 | `DIFY_KNOWLEDGE_API_KEY` | Dify 知识库 Dataset Key（`dataset-` 开头） |
@@ -148,6 +149,8 @@ node scripts/sync-wokepaike-dify.mjs --upload --serial --refresh-category=course
 
 - 模型：`chatClient.chat(CHAT_MODEL)`（OpenAI 兼容接口，默认 `deepseek-v4-flash`）。
 - 工具：根据客户端能力开关动态注册知识库、联网搜索和 Agent 文件工具。
+- 快速路径：主题明确且非实时的单轮校园问题会先检索知识库，并直接进入回答阶段，省去一次模型工具选择往返；最新通知、天气等实时问题仍走原有工具流程。
+- 长对话只向模型发送最近 24 条消息（可配置），减少提示词体积；本地完整会话不受影响。
 - 步数上限：普通问答最多 4 步；Agent 模式最多 7 步以容纳多次文件操作，最后一步统一关闭工具并生成最终答案。
 - 输出：AI SDK UI message stream，可携带文本、工具调用和审批请求。
 - 安全边界：能力开关由服务端再次解析；关闭的工具不进入 `streamText`。

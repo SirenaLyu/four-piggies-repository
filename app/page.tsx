@@ -433,6 +433,12 @@ export default function Home() {
   });
 
   const isLoading = status === "submitted" || status === "streaming";
+  const lastMessage = messages.at(-1);
+  const showProcessingIndicator =
+    isLoading &&
+    (!lastMessage ||
+      lastMessage.role === "user" ||
+      getMessageText(lastMessage).trim().length === 0);
   const hasPendingApproval = messages.some(hasPendingApprovals);
   const capabilityControlsDisabled = isLoading || hasPendingApproval;
 
@@ -967,7 +973,7 @@ export default function Home() {
           })}
 
           {/* AI 正在输入动画 */}
-          {isLoading && messages.at(-1)?.role === "user" && (
+          {showProcessingIndicator && (
             <div className="flex justify-start message-in">
               <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm mr-2 shrink-0">
                 <Logo size={20} color="#FFFFFF" accent="#8FC0FF" />
@@ -978,7 +984,9 @@ export default function Home() {
                   <span className="w-1.5 h-1.5 bg-primary-400 rounded-full thinking-dot [animation-delay:150ms]" />
                   <span className="w-1.5 h-1.5 bg-primary-400 rounded-full thinking-dot [animation-delay:300ms]" />
                 </div>
-                <span className="text-xs text-foreground/60">AI 正在处理…</span>
+                <span className="text-xs text-foreground/60">
+                  {status === "submitted" ? "正在理解问题…" : "正在检索并组织答案…"}
+                </span>
               </div>
             </div>
           )}

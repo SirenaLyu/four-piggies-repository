@@ -97,6 +97,20 @@ test("未命中主题时只回退到信息、政策与通知库", () => {
   ]);
 });
 
+test("食堂和宿舍问题只路由到校园信息库", () => {
+  const datasetIds = [
+    "975e7edb-4979-4cfe-95e2-9cc2f782488d",
+    "ef053c5b-7d01-40e7-a2b6-cbce54ac261f",
+    "76ca3310-ba82-4cd4-90d8-c3ed6fc1f3a8",
+  ];
+  assert.deepEqual(routeDatasetIds("东区有哪些食堂", datasetIds), [
+    "975e7edb-4979-4cfe-95e2-9cc2f782488d",
+  ]);
+  assert.deepEqual(routeDatasetIds("宿舍校园卡怎么补办", datasetIds), [
+    "975e7edb-4979-4cfe-95e2-9cc2f782488d",
+  ]);
+});
+
 test("支持按数据集设置独立最低分数", () => {
   const configured = JSON.stringify({ "dataset-a": 0.6, "dataset-b": 0.2 });
   assert.deepEqual(parseDatasetScoreThresholds(configured), {

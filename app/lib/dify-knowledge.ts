@@ -55,7 +55,7 @@ const DATASET_ROUTE_KEYWORDS: Record<DatasetRoute, RegExp> = {
   calendar: /校历|开学|放假|寒假|暑假|考试周|学期|注册时间|报到时间/,
   courses: /课程|选课|课表|学分|课程号|课程代码|上课|教师|老师/,
   policies: /政策|规定|办法|制度|流程|申请|办理|手续|材料|指南|细则/,
-  info: /地址|电话|联系方式|联系人|办公地点|办公室|部门|机构|校区/,
+  info: /地址|电话|联系方式|联系人|办公地点|办公室|部门|机构|校区|食堂|餐厅|宿舍|校园卡|一卡通/,
 };
 
 const DATASET_ROUTE_LABELS: Record<DatasetRoute, string> = {
