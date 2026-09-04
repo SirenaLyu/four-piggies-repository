@@ -1,0 +1,73 @@
+[
+  {
+    "id": "course-code",
+    "query": "2026春季 MATH3007.02 概率论 刘党政的时间地点和评课评分",
+    "expectedRoutes": ["courses"],
+    "liveExpectedAll": ["MATH3007.02", "刘党政", "评课社区评分：9.4/10"]
+  },
+  {
+    "id": "scholarship",
+    "query": "雪迪龙奖学金的申请条件和联系人",
+    "expectedRoutes": ["scholarships"]
+  },
+  {
+    "id": "library",
+    "query": "图书馆开馆时间和图书续借规则",
+    "expectedRoutes": ["library"]
+  },
+  {
+    "id": "notice",
+    "query": "最近学校有哪些讲座和活动通知",
+    "expectedRoutes": ["notices"]
+  },
+  {
+    "id": "shuttle",
+    "query": "东区到高新区的班车发车时间",
+    "expectedRoutes": ["shuttle"]
+  },
+  {
+    "id": "calendar",
+    "query": "教学日历里的考试周和放假时间",
+    "expectedRoutes": ["calendar"]
+  },
+  {
+    "id": "policy",
+    "query": "转专业申请流程、材料和管理办法",
+    "expectedRoutes": ["policies"]
+  },
+  {
+    "id": "campus-info",
+    "query": "教务处办公室地址和联系电话",
+    "expectedRoutes": ["info"]
+  },
+  {
+    "id": "multi-primary",
+    "query": "图书馆闭馆后还有去高新区的班车吗",
+    "expectedRoutes": ["library", "shuttle"]
+  },
+  {
+    "id": "course-natural-language",
+    "query": "量子力学课程由哪位老师上课，有多少学分",
+    "expectedRoutes": ["courses"]
+  },
+  {
+    "id": "scholarship-over-generic-policy",
+    "query": "研究生奖学金管理办法和申请流程",
+    "expectedRoutes": ["scholarships"]
+  },
+  {
+    "id": "calendar-over-recency-notice",
+    "query": "最新教学日历里的开学和考试周日期",
+    "expectedRoutes": ["calendar"]
+  },
+  {
+    "id": "policy-and-info",
+    "query": "教务处的政策规定和办公室地址",
+    "expectedRoutes": ["info", "policies"]
+  },
+  {
+    "id": "fallback",
+    "query": "学校这件事怎么办",
+    "expectedRoutes": ["info", "policies", "notices"]
+  }
+]

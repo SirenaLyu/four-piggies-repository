@@ -18,7 +18,11 @@ const sourceFiles = [
   "icourse_ratings.json",
   "icourse_cards_cache.json",
   "substitute_clean.json",
-];
+].concat(
+  fs.existsSync(path.join(sourceRoot, "icourse_rating_details.json"))
+    ? ["icourse_rating_details.json"]
+    : [],
+);
 
 const courseSources = [
   {
@@ -57,10 +61,14 @@ const sha256 = (buffer) =>
   crypto.createHash("sha256").update(buffer).digest("hex");
 
 const writeDocument = (name, title, blocks, category, metadata = {}) => {
+  const {
+    sourceDescription = "蜗壳排课工具本地数据",
+    ...documentMetadata
+  } = metadata;
   const content = [
     `# ${title}`,
     "",
-    "数据来源：蜗壳排课工具本地数据。以下每个分隔块都是独立、可检索的事实记录。",
+    `数据来源：${sourceDescription}。以下每个分隔块都是独立、可检索的事实记录。`,
     "",
     blocks.join("\n\n---\n\n"),
     "",
@@ -74,7 +82,7 @@ const writeDocument = (name, title, blocks, category, metadata = {}) => {
     blockCount: blocks.length,
     bytes: Buffer.byteLength(content),
     sha256: sha256(Buffer.from(content)),
-    ...metadata,
+    ...documentMetadata,
   };
 };
 
@@ -86,6 +94,11 @@ for (const entry of fs.readdirSync(outputRoot, { withFileTypes: true })) {
 }
 
 const ratings = readJson("icourse_ratings.json");
+const ratingDetails = fs.existsSync(
+  path.join(sourceRoot, "icourse_rating_details.json"),
+)
+  ? readJson("icourse_rating_details.json")
+  : {};
 const legacyCatalogPath = path.join(outputRoot, "legacy-course-catalog.json");
 const legacyCatalog = fs.existsSync(legacyCatalogPath)
   ? JSON.parse(fs.readFileSync(legacyCatalogPath, "utf8"))
@@ -108,6 +121,8 @@ for (const source of courseSources) {
     currentCourseCodes.add(courseCode);
     const catalog = legacyByCode.get(courseCode);
     const rating = ratings[`${source.termKey}|${course["课堂号"]}`];
+    const ratingDetail =
+      ratingDetails[`${source.termKey}|${course["课堂号"]}`] ?? null;
     const ratingText =
       typeof rating === "number"
         ? `${rating}/10（已按课程代码与教师严格匹配）`
@@ -136,6 +151,13 @@ for (const source of courseSources) {
       `限选人数：${clean(course["限选人数"])}`,
       `上课班级：${clean(course["上课班级"])}`,
       `评课社区评分：${ratingText}`,
+      `评课社区评价人数：${ratingDetail?.review_count ?? "暂无可靠匹配数据"}`,
+      `课程难度：${ratingDetail?.difficulty ?? "暂无可靠匹配数据"}`,
+      `作业多少：${ratingDetail?.workload ?? "暂无可靠匹配数据"}`,
+      `给分好坏：${ratingDetail?.grading ?? "暂无可靠匹配数据"}`,
+      `收获大小：${ratingDetail?.gain ?? "暂无可靠匹配数据"}`,
+      `评课社区来源页面：${ratingDetail?.source_urls?.join("、") ?? "暂无可靠匹配数据"}`,
+      `评分数据提取时间：${ratingDetail?.extracted_at ?? "未提供"}`,
       "评分说明：评分来自 icourse.club 聚合数据；无可靠匹配时不得推测评分。",
     ].join("\n");
   });
@@ -143,6 +165,8 @@ for (const source of courseSources) {
     writeDocument(source.output, `${source.label}本科课程信息`, blocks, "courses", {
       sourceFile: source.file,
       termKey: source.termKey,
+      sourceDescription:
+        "蜗壳排课工具本地课程数据，并与 icourse.club 公开聚合评分按课程代码和教师严格匹配",
     }),
   );
 }
@@ -275,10 +299,18 @@ for (let offset = 0; offset < reviewCards.length; offset += reviewChunkSize) {
       `课程名称：${clean(card.name)}`,
       `授课教师：${clean(card.teachers_raw)}`,
       `评课社区评分：${score}`,
+      `当前评分状态：${card.currently_rated === true ? "有公开聚合评分" : "暂无公开聚合评分"}`,
+      `评价人数：${typeof card.review_count === "number" ? card.review_count : "未提供"}`,
+      `课程难度：${clean(card.difficulty)}`,
+      `作业多少：${clean(card.workload)}`,
+      `给分好坏：${clean(card.grading)}`,
+      `收获大小：${clean(card.gain)}`,
       `评课社区课程编号：${clean(card.id)}`,
       `评课社区课程代码：${clean(card.icourse_course_code)}`,
       `收录学期：${Array.isArray(card.semesters) ? card.semesters.map(clean).join("、") : "未提供"}`,
-      `来源页面：https://icourse.club/course/${encodeURIComponent(card.id)}/`,
+      `来源页面：${clean(card.source_url ?? `https://icourse.club/course/${encodeURIComponent(card.id)}/`)}`,
+      `数据提取时间：${clean(card.extracted_at)}`,
+      `课程目录检查时间：${clean(card.catalog_checked_at)}`,
       "数据边界：此数据仅含聚合评分和开课学期，不含学生文字评价；不得据此编造评价观点。",
     ].join("\n");
   });
@@ -289,7 +321,11 @@ for (let offset = 0; offset < reviewCards.length; offset += reviewChunkSize) {
       `评课社区课程评分汇总（第 ${offset + 1}—${offset + slice.length} 条）`,
       blocks,
       "reviews",
-      { sourceRange: [offset + 1, offset + slice.length] },
+      {
+        sourceRange: [offset + 1, offset + slice.length],
+        sourceDescription:
+          "icourse.club 公开课程聚合页；仅保留课程、教师、课程号、学期、聚合评分和评价维度，不含学生点评正文",
+      },
     ),
   );
 }

@@ -14,10 +14,16 @@ export function loadAuthorizedDirs(): string[] {
   }
 }
 
-export function saveAuthorizedDirs(dirs: string[]) {
+export function saveAuthorizedDirs(dirs: string[]): boolean {
   if (typeof window !== "undefined") {
-    window.localStorage.setItem(DIRS_KEY, JSON.stringify(dirs));
+    try {
+      window.localStorage.setItem(DIRS_KEY, JSON.stringify(dirs));
+      return true;
+    } catch (error) {
+      console.warn("[authorized-directories] 无法保存授权目录：", error);
+    }
   }
+  return false;
 }
 
 export function addAuthorizedDirectory(dir: string): string[] {

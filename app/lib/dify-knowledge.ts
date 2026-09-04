@@ -2,6 +2,11 @@
 
 import { TtlLruCache } from "./ttl-lru-cache.ts";
 import { withTimeoutSignal } from "./abort-signals.ts";
+import {
+  errorMessage,
+  logEvent,
+  type TelemetryContext,
+} from "./telemetry.ts";
 // Dify 知识库检索模块
 // ----------------------------------------------------------------------------
 // 调用自建 Dify 的「知识库检索 API」（Dataset Retrieval API）：
@@ -36,6 +41,9 @@ type DatasetRoute =
   | "policies"
   | "info";
 
+const EXACT_COURSE_QUERY_PATTERN =
+  /(?:课堂号|课程号|课程代码)|\b(?:[A-Z]{2,}\d{3,}(?:\.\d+)?|\d{2,}[A-Z]\d{2,})\b/i;
+
 const KNOWN_DATASET_ROUTES: Record<DatasetRoute, string[]> = {
   scholarships: ["058eb792-77df-4c98-8f40-1feabf5c10dc"],
   library: ["748dd072-a42c-4cfc-8df4-b0dc9432be50"],
@@ -53,10 +61,19 @@ const DATASET_ROUTE_KEYWORDS: Record<DatasetRoute, RegExp> = {
   notices: /通知|公告|公示|讲座|活动|新闻|最新|教务处动态/,
   shuttle: /班车|校车|发车|乘车|车次|东区.*西区|西区.*东区|高新区/,
   calendar: /校历|开学|放假|寒假|暑假|考试周|学期|注册时间|报到时间/,
-  courses: /课程|选课|课表|学分|课程号|课程代码|上课|教师|老师/,
+  courses:
+    /课程|选课|课表|学分|课程号|课堂号|课程代码|上课|教师|老师|\b(?:[A-Z]{2,}\d{3,}(?:\.\d+)?|\d{2,}[A-Z]\d{2,})\b/i,
   policies: /政策|规定|办法|制度|流程|申请|办理|手续|材料|指南|细则/,
   info: /地址|电话|联系方式|联系人|办公地点|办公室|部门|机构|校区|食堂|餐厅|宿舍|校园卡|一卡通/,
 };
+
+const PRIMARY_DATASET_ROUTES: DatasetRoute[] = [
+  "scholarships",
+  "library",
+  "shuttle",
+  "calendar",
+  "courses",
+];
 
 const DATASET_ROUTE_LABELS: Record<DatasetRoute, string> = {
   scholarships: "奖助学金",
@@ -175,7 +192,12 @@ export function routeDatasetIds(
       ),
     );
 
-  const matchedIds = idsForRoutes(matchedRoutes);
+  const primaryRoutes = matchedRoutes.filter((route) =>
+    PRIMARY_DATASET_ROUTES.includes(route),
+  );
+  const matchedIds = idsForRoutes(
+    primaryRoutes.length > 0 ? primaryRoutes : matchedRoutes,
+  );
   if (matchedIds.length > 0) return matchedIds;
 
   const defaultIds = idsForRoutes(["info", "policies", "notices"]);
@@ -272,15 +294,26 @@ export function filterChunksByDatasetThreshold(
 /** 使用项目历史评测验证过的 semantic + reranker + top_k=5 默认参数。 */
 export function buildRetrievalModel(
   env: NodeJS.ProcessEnv = process.env,
+  query = "",
 ): Record<string, unknown> {
+  const isExactCourseQuery = EXACT_COURSE_QUERY_PATTERN.test(query);
   const rerankingEnabled = env.DIFY_RERANKING_ENABLED?.trim().toLowerCase() !== "false";
   const threshold = Number(env.DIFY_RETRIEVAL_SCORE_THRESHOLD);
   const thresholdEnabled =
     Boolean(env.DIFY_RETRIEVAL_SCORE_THRESHOLD?.trim()) && Number.isFinite(threshold);
   const model: Record<string, unknown> = {
-    search_method: env.DIFY_RETRIEVAL_SEARCH_METHOD?.trim() || "semantic_search",
+    search_method:
+      env.DIFY_RETRIEVAL_SEARCH_METHOD?.trim() ||
+      (isExactCourseQuery
+        ? "hybrid_search"
+        : "semantic_search"),
     reranking_enable: rerankingEnabled,
-    top_k: Math.min(20, Math.floor(numberFromEnv(env.DIFY_RETRIEVAL_TOP_K, 5))),
+    top_k: Math.min(
+      20,
+      Math.floor(
+        numberFromEnv(env.DIFY_RETRIEVAL_TOP_K, isExactCourseQuery ? 10 : 5),
+      ),
+    ),
     score_threshold_enabled: thresholdEnabled,
   };
   if (rerankingEnabled) {
@@ -306,7 +339,7 @@ export function buildKnowledgeCacheKey(
     baseUrl: config.baseUrl.replace(/\/+$/, ""),
     datasetIds: [...config.datasetIds].sort(),
     routeMap: env.DIFY_DATASET_ROUTE_MAP?.trim() || "",
-    retrievalModel: buildRetrievalModel(env),
+    retrievalModel: buildRetrievalModel(env, query),
     datasetThresholds: parseDatasetScoreThresholds(
       env.DIFY_DATASET_SCORE_THRESHOLDS,
     ),
@@ -356,10 +389,14 @@ async function retrieveFromDataset(
   datasetId: string,
   query: string,
   requestSignal?: AbortSignal,
+  telemetry: TelemetryContext = {
+    requestId: "background",
+    scope: "knowledge",
+  },
 ): Promise<KnowledgeChunk[]> {
   const body: Record<string, unknown> = {
     query,
-    retrieval_model: buildRetrievalModel(),
+    retrieval_model: buildRetrievalModel(process.env, query),
   };
 
   // 超时通过 AbortSignal 控制，避免请求挂死拖垮主进程
@@ -388,18 +425,21 @@ async function retrieveFromDataset(
   const data = await response.json();
   const records = extractRecordsFromResponse(data);
 
-  console.log(
-    `[dify-knowledge] 知识库 ${datasetId} 请求耗时 ${Date.now() - startedAt}ms，返回 ${records.length} 条 record`,
-  );
+  logEvent(telemetry, "knowledge.dataset_completed", {
+    datasetId,
+    durationMs: Date.now() - startedAt,
+    recordCount: records.length,
+  });
 
   const chunks = records
     .map((record) => extractRecord(record, datasetId))
     .filter((chunk): chunk is KnowledgeChunk => chunk !== null);
   const filtered = filterChunksByDatasetThreshold(chunks, datasetId);
   if (filtered.length !== chunks.length) {
-    console.log(
-      `[dify-knowledge] 知识库 ${datasetId} 按独立阈值过滤 ${chunks.length - filtered.length} 条低分片段`,
-    );
+    logEvent(telemetry, "knowledge.dataset_filtered", {
+      datasetId,
+      filteredCount: chunks.length - filtered.length,
+    });
   }
   return filtered;
 }
@@ -413,6 +453,10 @@ async function retrieveFromDataset(
 export async function retrieveKnowledgeContext(
   query: string,
   requestSignal?: AbortSignal,
+  telemetry: TelemetryContext = {
+    requestId: "background",
+    scope: "knowledge",
+  },
 ): Promise<KnowledgeRetrievalResult> {
   const { baseUrl, apiKey, datasetIds } = getDifyKnowledgeConfig();
 
@@ -434,27 +478,41 @@ export async function retrieveKnowledgeContext(
 
   const cacheKey = buildKnowledgeCacheKey(query, { baseUrl, datasetIds });
   const cached = retrievalCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    logEvent(telemetry, "knowledge.cache_hit", {
+      chunkCount: cached.chunkCount,
+    });
+    return cached;
+  }
 
   const routedDatasetIds = routeDatasetIds(query, datasetIds);
-  console.log(
-    `[dify-knowledge] 查询路由到 ${routedDatasetIds.length}/${datasetIds.length} 个知识库：` +
-      routedDatasetIds.map((id) => datasetLabel(id)).join("、"),
-  );
+  logEvent(telemetry, "knowledge.routed", {
+    routedCount: routedDatasetIds.length,
+    configuredCount: datasetIds.length,
+    routes: routedDatasetIds.map((id) => datasetLabel(id)).join(","),
+  });
 
   // 只并发请求与查询主题相关的知识库
   const retrieveStartedAt = Date.now();
   const settled = await Promise.allSettled(
     routedDatasetIds.map((datasetId) =>
-      retrieveFromDataset(baseUrl, apiKey, datasetId, query, requestSignal),
+      retrieveFromDataset(
+        baseUrl,
+        apiKey,
+        datasetId,
+        query,
+        requestSignal,
+        telemetry,
+      ),
     ),
   );
   if (requestSignal?.aborted) {
     throw requestSignal.reason ?? new DOMException("请求已取消", "AbortError");
   }
-  console.log(
-    `[dify-knowledge] ${routedDatasetIds.length} 个知识库并发检索总耗时 ${Date.now() - retrieveStartedAt}ms`,
-  );
+  logEvent(telemetry, "knowledge.datasets_settled", {
+    datasetCount: routedDatasetIds.length,
+    durationMs: Date.now() - retrieveStartedAt,
+  });
 
   const chunksByDataset: KnowledgeChunk[][] = [];
   const failedDatasets: string[] = [];
@@ -464,10 +522,14 @@ export async function retrieveKnowledgeContext(
       chunksByDataset.push(result.value);
     } else {
       failedDatasets.push(routedDatasetIds[index]);
-      const reason =
-        result.reason instanceof Error ? result.reason.message : String(result.reason);
-      console.error(
-        `[dify-knowledge] 知识库 ${routedDatasetIds[index]} 检索失败：${reason}`,
+      logEvent(
+        telemetry,
+        "knowledge.dataset_failed",
+        {
+          datasetId: routedDatasetIds[index],
+          error: errorMessage(result.reason),
+        },
+        "error",
       );
     }
   });
@@ -511,6 +573,12 @@ export async function retrieveKnowledgeContext(
     chunkCount: uniqueChunks.length,
     error,
   };
+  logEvent(telemetry, "knowledge.context_ready", {
+    durationMs: Date.now() - retrieveStartedAt,
+    chunkCount: uniqueChunks.length,
+    failedDatasetCount: failedDatasets.length,
+    contextChars: context.length,
+  });
   retrievalCache.set(cacheKey, result);
   return result;
 }

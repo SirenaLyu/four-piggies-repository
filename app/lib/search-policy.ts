@@ -1,13 +1,11 @@
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 
 export const MAX_WEB_SEARCH_CALLS = 2;
-export const MAX_KNOWLEDGE_SEARCH_CALLS = 1;
 export const FINAL_ANSWER_STEP = 3;
 export const AGENT_FINAL_ANSWER_STEP = 6;
 
 export interface RetrievalUsage {
   webSearches: number;
-  knowledgeSearches: number;
 }
 
 export function finalAnswerStepForCapabilities(agentEnabled: boolean): number {
@@ -18,6 +16,10 @@ const WEATHER_PATTERN =
   /天气|气温|温度|降雨|下雨|降水|空气质量|风力|台风|暴雨|雷阵雨/i;
 const CAMPUS_PATTERN =
   /中国科学技术大学|中科大|科大|USTC|校内|校园|教务|研究生院|本科生院|图书馆|班车|校车|奖学金|助学金/i;
+const CAMPUS_PERSON_ROLE_PATTERN =
+  /老师|教师|教授|副?校长|书记|院士|学校领导|师资|个人主页|简历|履历/i;
+const HISTORICAL_CAMPUS_LEADER_PATTERN =
+  /(?:历任|历届|历代).{0,6}(?:校长|书记)|(?:校长|书记).{0,6}(?:历任|历届|历代)/i;
 const RECENCY_PATTERN =
   /最新|最近|近期|刚刚|今日|今天|本周|本月|latest|recent|newest|today/i;
 
@@ -26,6 +28,7 @@ const WEATHER_OFFICIAL_DOMAINS = [
   "nmc.cn",
   "weather.com.cn",
 ];
+const TRUSTED_ACADEMIC_DOMAINS = ["ustc.edu.cn", "cas.cn", "ac.cn", "edu.cn", "gov.cn"];
 
 const DEFAULT_BLOCKED_DOMAINS = [
   "baijiahao.baidu.com",
@@ -93,6 +96,18 @@ function expandCampusAlias(query: string): string {
   return query.replace(/中科大|中国科大|USTC|科大/gi, "中国科学技术大学");
 }
 
+export function extractCampusPersonName(query: string): string | null {
+  if (HISTORICAL_CAMPUS_LEADER_PATTERN.test(query)) return null;
+  const cleaned = query
+    .replace(/中国科学技术大学|中国科大|中科大|USTC/gi, " ")
+    .replace(/请问|麻烦|帮我|联网搜索|搜索|查询|查找|介绍一下|介绍|了解一下|了解|关于/g, " ")
+    .replace(/\s+/g, "");
+  const match = cleaned.match(
+    /([\p{Script=Han}·]{2,4})(?=老师|教师|教授|副?校长|书记|院士)/u,
+  );
+  return match?.[1] ?? null;
+}
+
 function appendRelativeDate(query: string, now: Date): string {
   if (/\b20\d{2}[-/.年]\d{1,2}[-/.月]\d{1,2}(?:日)?\b/.test(query)) {
     return query;
@@ -140,11 +155,37 @@ export function normalizeWebSearchQuery(
     ].join(" ");
   }
 
-  if (CAMPUS_PATTERN.test(normalized)) {
-    return appendRelativeDate(expandCampusAlias(normalized), now);
+  if (CAMPUS_PATTERN.test(normalized) || CAMPUS_PERSON_ROLE_PATTERN.test(normalized)) {
+    const expanded = expandCampusAlias(normalized);
+    const campusScoped = /中国科学技术大学/.test(expanded)
+      ? expanded
+      : `${expanded} 中国科学技术大学`;
+    return appendRelativeDate(campusScoped, now);
   }
 
   return appendRelativeDate(normalized, now);
+}
+
+export function buildWebSearchQueries(query: string, now = new Date()): string[] {
+  const primary = normalizeWebSearchQuery(query, now);
+  const queries = [primary];
+  const personName = extractCampusPersonName(query);
+  if (personName) {
+    const role = query.match(/副?校长|书记|院士|教授|老师|教师/)?.[0] ?? "个人主页";
+    queries.push(`${personName} 中国科学技术大学 ${role} 个人简历 官方`);
+  } else if (HISTORICAL_CAMPUS_LEADER_PATTERN.test(query)) {
+    queries.push("中国科学技术大学 历任校长 校史 任职时间 官方");
+  }
+  return Array.from(new Set(queries.map((item) => item.trim()).filter(Boolean))).slice(0, 2);
+}
+
+export function searchResultDirectlyMatchesQuery(result: string, query: string): boolean {
+  const personName = extractCampusPersonName(query);
+  if (personName) return result.includes(personName);
+  if (HISTORICAL_CAMPUS_LEADER_PATTERN.test(query)) {
+    return /校长/.test(result) && /历任|历届|校史|任职/.test(result);
+  }
+  return true;
 }
 
 function hostnameFromUrl(value: string): string | null {
@@ -277,6 +318,13 @@ function sourcePriority(block: string, query: string): number {
   if (hosts.some((host) => hostMatches(host, "edu.cn"))) {
     trustScore = Math.max(trustScore, 60);
   }
+  if (
+    hosts.some(
+      (host) => hostMatches(host, "cas.cn") || hostMatches(host, "ac.cn"),
+    )
+  ) {
+    trustScore = Math.max(trustScore, 80);
+  }
   if (hosts.length === 0) trustScore = Math.max(trustScore, 10);
   return (
     trustScore +
@@ -345,11 +393,25 @@ export function sanitizeWebSearchResult(
   if (generallyRelevant.length >= 2) safeBlocks = generallyRelevant;
 
   if (CAMPUS_PATTERN.test(query)) {
-    const officialBlocks = safeBlocks.filter(({ hosts }) =>
-      hosts.some((host) => hostMatches(host, "ustc.edu.cn")),
+    const personName = extractCampusPersonName(query);
+    const personBlocks = personName
+      ? safeBlocks.filter(({ block }) => block.includes(personName))
+      : [];
+    const officialBlocks = (personName ? personBlocks : safeBlocks).filter(
+      ({ hosts }) => hosts.some((host) => hostMatches(host, "ustc.edu.cn")),
     );
+    if (personName && personBlocks.length === 0) {
+      return `未找到直接提及“${personName}”的可靠搜索结果。`;
+    }
     if (officialBlocks.length > 0) {
       safeBlocks = officialBlocks;
+    } else if (personBlocks.length > 0) {
+      const trustedPersonBlocks = personBlocks.filter(({ hosts }) =>
+        hosts.some((host) =>
+          TRUSTED_ACADEMIC_DOMAINS.some((domain) => hostMatches(host, domain)),
+        ),
+      );
+      safeBlocks = trustedPersonBlocks.length > 0 ? trustedPersonBlocks : personBlocks;
     } else {
       const campusRelevant = safeBlocks.filter(({ block }) =>
         /中国科学技术大学|中科大|中国科大|USTC/i.test(block),
@@ -442,9 +504,6 @@ export function activeToolNamesForStep(
   return toolNames.filter((toolName) => {
     if (toolName === "web_search") {
       return usage.webSearches < MAX_WEB_SEARCH_CALLS;
-    }
-    if (toolName === "query_knowledge_base") {
-      return usage.knowledgeSearches < MAX_KNOWLEDGE_SEARCH_CALLS;
     }
     return true;
   });

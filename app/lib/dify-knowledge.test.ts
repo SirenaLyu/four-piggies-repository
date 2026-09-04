@@ -72,6 +72,27 @@ test("默认使用历史评测验证过的 semantic reranker 参数", () => {
   assert.equal(model.score_threshold_enabled, false);
 });
 
+test("包含精确课程号的查询使用混合检索", () => {
+  const model = buildRetrievalModel(
+    {} as NodeJS.ProcessEnv,
+    "查询 2026 春季 MATH3007.02 的课程信息",
+  );
+  assert.equal(model.search_method, "hybrid_search");
+  assert.equal(model.reranking_enable, true);
+  assert.equal(model.top_k, 10);
+});
+
+test("环境变量可以显式覆盖按查询选择的检索方式", () => {
+  const model = buildRetrievalModel(
+    {
+      NODE_ENV: "test",
+      DIFY_RETRIEVAL_SEARCH_METHOD: "semantic_search",
+    } as NodeJS.ProcessEnv,
+    "课堂号 MATH3007.02",
+  );
+  assert.equal(model.search_method, "semantic_search");
+});
+
 test("奖学金查询只路由到奖助学金数据集", () => {
   const datasetIds = [
     "058eb792-77df-4c98-8f40-1feabf5c10dc",
@@ -81,6 +102,39 @@ test("奖学金查询只路由到奖助学金数据集", () => {
   assert.deepEqual(routeDatasetIds("雪迪龙奖学金联系人是谁", datasetIds), [
     "058eb792-77df-4c98-8f40-1feabf5c10dc",
   ]);
+});
+
+test("明确业务主题优先，不因申请和联系人扩散到通用库", () => {
+  const routeMap = JSON.stringify({
+    scholarships: ["scholarships"],
+    policies: ["policies"],
+    info: ["info"],
+  });
+  assert.deepEqual(
+    routeDatasetIds(
+      "雪迪龙奖学金的申请条件和联系人",
+      ["scholarships", "policies", "info"],
+      routeMap,
+    ),
+    ["scholarships"],
+  );
+});
+
+test("课程号本身可以触发课程知识库路由", () => {
+  const routeMap = JSON.stringify({
+    courses: ["courses"],
+    info: ["info"],
+    policies: ["policies"],
+    notices: ["notices"],
+  });
+  assert.deepEqual(
+    routeDatasetIds(
+      "MATH3007.02 刘党政的时间地点和评分",
+      ["courses", "info", "policies", "notices"],
+      routeMap,
+    ),
+    ["courses"],
+  );
 });
 
 test("未命中主题时只回退到信息、政策与通知库", () => {

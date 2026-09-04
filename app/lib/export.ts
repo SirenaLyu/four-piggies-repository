@@ -47,27 +47,92 @@ async function buildDocxBlob(content: string): Promise<Blob> {
 async function buildPdfBlob(content: string): Promise<Blob> {
   const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({ unit: "pt", format: "a4" });
-  const margin = 40;
-  const maxWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-  const pageHeight = pdf.internal.pageSize.getHeight();
-  const lines = pdf.splitTextToSize(content, maxWidth) as string[];
-  let y = margin;
-  for (const line of lines) {
-    if (y > pageHeight - margin) {
-      pdf.addPage();
-      y = margin;
+  // jsPDF 的内置 Helvetica 不包含中文字形。本地应用直接使用浏览器
+  // 已安装字体绘制到画布，再逐页嵌入 PDF，避免中文变成方框或空白。
+  const canvas = document.createElement("canvas");
+  canvas.width = 1240;
+  canvas.height = 1754;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("浏览器无法创建 PDF 绘图上下文");
+
+  const margin = 88;
+  const lineHeight = 44;
+  context.font =
+    '28px "Microsoft YaHei", "Noto Sans CJK SC", "PingFang SC", sans-serif';
+  context.textBaseline = "top";
+
+  const lines = content
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .flatMap((line) =>
+      wrapTextByWidth(
+        line,
+        canvas.width - margin * 2,
+        (value) => context.measureText(value).width,
+      ),
+    );
+  if (lines.length === 0) lines.push("");
+
+  let offset = 0;
+  let pageIndex = 0;
+  while (offset < lines.length) {
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#111827";
+    let y = margin;
+    while (offset < lines.length && y + lineHeight <= canvas.height - margin) {
+      context.fillText(lines[offset], margin, y);
+      offset += 1;
+      y += lineHeight;
     }
-    pdf.text(line, margin, y);
-    y += 16;
+    if (pageIndex > 0) pdf.addPage();
+    pdf.addImage(
+      canvas.toDataURL("image/jpeg", 0.94),
+      "JPEG",
+      0,
+      0,
+      pdf.internal.pageSize.getWidth(),
+      pdf.internal.pageSize.getHeight(),
+    );
+    pageIndex += 1;
   }
   return pdf.output("blob");
+}
+
+export function wrapTextByWidth(
+  text: string,
+  maxWidth: number,
+  measureWidth: (value: string) => number,
+): string[] {
+  if (!(maxWidth > 0)) throw new Error("maxWidth 必须大于 0");
+  const lines: string[] = [];
+  let current = "";
+  for (const character of Array.from(text)) {
+    const candidate = current + character;
+    if (current && measureWidth(candidate) > maxWidth) {
+      lines.push(current);
+      current = character;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current || text.length === 0) lines.push(current);
+  return lines;
+}
+
+export function sanitizeDownloadFilename(filename: string): string {
+  const normalized = filename
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .trim()
+    .slice(0, 180);
+  return normalized || "download";
 }
 
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename;
+  a.download = sanitizeDownloadFilename(filename);
   document.body.appendChild(a);
   a.click();
   a.remove();

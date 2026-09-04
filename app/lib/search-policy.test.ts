@@ -2,11 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activeToolNamesForStep,
+  buildWebSearchQueries,
+  extractCampusPersonName,
   extractWeatherLocation,
   finalAnswerStepForCapabilities,
   isReliableSearchResult,
   normalizeWebSearchQuery,
   sanitizeWebSearchResult,
+  searchResultDirectlyMatchesQuery,
 } from "./search-policy.ts";
 
 test("天气查询补充绝对日期、完整字段和本地气象台关键词", () => {
@@ -33,6 +36,25 @@ test("校园查询展开学校别名但不使用会损害召回的 site 限定",
     ),
     "中国科学技术大学最近有什么讲座 检索基准日期 2026-08-31",
   );
+});
+
+test("校园人物查询自动补充学校上下文并生成聚焦的备用查询", () => {
+  const now = new Date("2026-09-01T02:00:00.000Z");
+  assert.equal(extractCampusPersonName("联网搜索张见见老师"), "张见见");
+  assert.equal(extractCampusPersonName("介绍常进校长"), "常进");
+  assert.equal(extractCampusPersonName("科大历任校长给我排序"), null);
+  assert.deepEqual(buildWebSearchQueries("联网搜索张见见老师", now), [
+    "联网搜索张见见老师 中国科学技术大学",
+    "张见见 中国科学技术大学 老师 个人简历 官方",
+  ]);
+  assert.match(
+    normalizeWebSearchQuery("介绍常进校长", now),
+    /常进校长 中国科学技术大学/,
+  );
+  assert.deepEqual(buildWebSearchQueries("科大历任校长给我排序", now), [
+    "中国科学技术大学历任校长给我排序",
+    "中国科学技术大学 历任校长 校史 任职时间 官方",
+  ]);
 });
 
 test("通用查询把相对日期转换为绝对目标日期", () => {
@@ -78,6 +100,25 @@ test("校园查询有 USTC 官方结果时删除非官方噪声", () => {
   assert.match(safe, /news\.ustc\.edu\.cn/);
   assert.doesNotMatch(safe, /sohu/);
   assert.doesNotMatch(safe, /其他学校/);
+});
+
+test("校园人物搜索保留直接命中的可信学术来源并删除无关校内页面", () => {
+  const raw = [
+    "中国科大心理课程题库，没有出现目标教师\nhttps://www.ustc.edu.cn/psychology",
+    "常进，中国科学院院士，空间高能粒子探测研究者\nhttps://www.cas.cn/ky/kjjl/cj",
+    "常进娱乐资讯\nhttps://example.com/celebrity",
+  ].join("\n\n");
+  const safe = sanitizeWebSearchResult(
+    raw,
+    "介绍常进校长 中国科学技术大学",
+  );
+  assert.match(safe, /cas\.cn/);
+  assert.doesNotMatch(safe, /psychology|娱乐资讯/);
+  assert.equal(searchResultDirectlyMatchesQuery(safe, "介绍常进校长"), true);
+  assert.equal(
+    searchResultDirectlyMatchesQuery("无关页面", "介绍常进校长"),
+    false,
+  );
 });
 
 test("天气查询删除地点不一致的结果", () => {
@@ -149,25 +190,23 @@ test("带绝对日期的天气查询删除旧日期页面和广告天气站", ()
   assert.doesNotMatch(safe, /2345/);
 });
 
-test("检索预算耗尽后关闭对应工具，最后一步关闭全部工具", () => {
+test("联网预算耗尽后仅关闭联网工具，知识库仍可继续检索", () => {
   const tools = ["query_knowledge_base", "web_search", "read_file"];
   assert.deepEqual(
     activeToolNamesForStep(tools, 1, {
-      knowledgeSearches: 1,
       webSearches: 2,
     }),
-    ["read_file"],
+    ["query_knowledge_base", "read_file"],
   );
   assert.deepEqual(
     activeToolNamesForStep(tools, 3, {
-      knowledgeSearches: 0,
       webSearches: 0,
     }),
     [],
   );
 });
 
-test("Agent 模式保留更多文件工具步骤，但仍受检索次数预算约束", () => {
+test("Agent 模式保留更多文件和知识库检索步骤", () => {
   const finalAnswerStep = finalAnswerStepForCapabilities(true);
   const tools = ["query_knowledge_base", "web_search", "read_file"];
   assert.equal(finalAnswerStep, 6);
@@ -175,16 +214,16 @@ test("Agent 模式保留更多文件工具步骤，但仍受检索次数预算�
     activeToolNamesForStep(
       tools,
       3,
-      { knowledgeSearches: 1, webSearches: 2 },
+      { webSearches: 2 },
       finalAnswerStep,
     ),
-    ["read_file"],
+    ["query_knowledge_base", "read_file"],
   );
   assert.deepEqual(
     activeToolNamesForStep(
       tools,
       finalAnswerStep,
-      { knowledgeSearches: 0, webSearches: 0 },
+      { webSearches: 0 },
       finalAnswerStep,
     ),
     [],

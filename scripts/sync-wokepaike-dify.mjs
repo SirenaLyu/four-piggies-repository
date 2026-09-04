@@ -16,9 +16,12 @@ const generatedRoot = path.resolve(
 );
 const shouldUpload = process.argv.includes("--upload");
 const serialIndexing = process.argv.includes("--serial");
-const refreshCategory = process.argv
+const refreshCategories = process.argv
   .find((value) => value.startsWith("--refresh-category="))
-  ?.slice("--refresh-category=".length);
+  ?.slice("--refresh-category=".length)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean) ?? [];
 
 if (!baseUrl || !apiKey) {
   throw new Error("缺少 DIFY_BASE_URL 或 DIFY_KNOWLEDGE_API_KEY");
@@ -27,28 +30,85 @@ if (!baseUrl || !apiKey) {
 const manifest = JSON.parse(
   fs.readFileSync(path.join(generatedRoot, "wokepaike_manifest.json"), "utf8"),
 );
+const runId = new Date().toISOString().replace(/[:.]/g, "-");
+const runRoot = path.join(generatedRoot, "runs", runId);
+if (shouldUpload) {
+  fs.mkdirSync(runRoot, { recursive: true });
+  fs.copyFileSync(
+    path.join(generatedRoot, "wokepaike_manifest.json"),
+    path.join(runRoot, "wokepaike_manifest.json"),
+  );
+  for (const document of manifest.documents) {
+    fs.copyFileSync(
+      path.join(generatedRoot, document.name),
+      path.join(runRoot, document.name),
+    );
+  }
+}
+
+function writeRunArtifact(name, value) {
+  const content = `${JSON.stringify(value, null, 2)}\n`;
+  fs.writeFileSync(path.join(generatedRoot, name), content, "utf8");
+  if (shouldUpload) {
+    fs.writeFileSync(path.join(runRoot, name), content, "utf8");
+  }
+}
+
 const expectedNames = new Set(manifest.documents.map((document) => document.name));
 const headers = { Authorization: `Bearer ${apiKey}` };
 
 async function api(pathname, init = {}) {
-  const response = await fetch(`${baseUrl}${pathname}`, {
-    ...init,
-    headers: { ...headers, ...(init.headers ?? {}) },
-    signal: AbortSignal.timeout(120_000),
-  });
-  const text = await response.text();
-  let body;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = { raw: text.slice(0, 1_000) };
+  const method = init.method ?? "GET";
+  const attempts = method === "GET" ? 4 : 1;
+  let lastError;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(`${baseUrl}${pathname}`, {
+        ...init,
+        headers: { ...headers, ...(init.headers ?? {}) },
+        signal: AbortSignal.timeout(120_000),
+      });
+      const text = await response.text();
+      let body;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = { raw: text.slice(0, 1_000) };
+      }
+      if (!response.ok) {
+        const error = new Error(
+          `${method} ${pathname} -> HTTP ${response.status}: ${JSON.stringify(body).slice(0, 1_000)}`,
+        );
+        if (method !== "GET" || (response.status < 500 && response.status !== 429)) {
+          error.retryable = false;
+          throw error;
+        }
+        lastError = error;
+      } else {
+        return body;
+      }
+    } catch (error) {
+      lastError = error;
+      if (method !== "GET" || error.retryable === false) throw error;
+    }
+
+    if (attempt < attempts) {
+      const delayMs = attempt * 2_000;
+      console.warn(
+        JSON.stringify({
+          event: "read-retry",
+          pathname,
+          attempt,
+          delayMs,
+          error: String(lastError?.message ?? lastError),
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
-  if (!response.ok) {
-    throw new Error(
-      `${init.method ?? "GET"} ${pathname} -> HTTP ${response.status}: ${JSON.stringify(body).slice(0, 1_000)}`,
-    );
-  }
-  return body;
+
+  throw lastError;
 }
 
 async function listDocuments() {
@@ -191,27 +251,36 @@ async function waitForDocument(documentId, name, timeoutMs = 20 * 60 * 1_000) {
 }
 
 const before = await listDocuments();
+const beforeSnapshot = {
+  capturedAt: new Date().toISOString(),
+  datasetId,
+  totalDocuments: before.length,
+  documents: before.map(compactDocument),
+};
+writeRunArtifact("remote-before.json", beforeSnapshot);
 const existingByName = new Map(before.map((document) => [document.name, document]));
 const existingManaged = before.filter((document) => expectedNames.has(document.name));
 const missing = manifest.documents.filter(
   (document) => !existingByName.has(document.name),
 );
-const refresh = refreshCategory
+const refresh = refreshCategories.length > 0
   ? manifest.documents.filter(
       (document) =>
-        document.category === refreshCategory && existingByName.has(document.name),
+        refreshCategories.includes(document.category) &&
+        existingByName.has(document.name),
     )
   : [];
 
 console.log(
   JSON.stringify({
     mode: shouldUpload ? "upload" : "dry-run",
+    runId: shouldUpload ? runId : null,
     datasetId,
     expected: manifest.documents.length,
     existingManaged: existingManaged.length,
     missing: missing.length,
     refresh: refresh.length,
-    refreshCategory: refreshCategory ?? null,
+    refreshCategories,
     existingUnmanaged: before.length - existingManaged.length,
     serialIndexing,
   }),
@@ -254,11 +323,11 @@ for (let index = 0; index < missing.length; index += 1) {
   }
 }
 
-fs.writeFileSync(
-  path.join(generatedRoot, "upload-results.json"),
-  `${JSON.stringify({ uploadedAt: new Date().toISOString(), uploadResults }, null, 2)}\n`,
-  "utf8",
-);
+writeRunArtifact("upload-results.json", {
+  runId,
+  uploadedAt: new Date().toISOString(),
+  uploadResults,
+});
 
 const startedAt = Date.now();
 const timeoutMs = 45 * 60 * 1_000;
@@ -302,11 +371,7 @@ const snapshot = {
     .filter((document) => !expectedNames.has(document.name))
     .map(compactDocument),
 };
-fs.writeFileSync(
-  path.join(generatedRoot, "remote-after.json"),
-  `${JSON.stringify(snapshot, null, 2)}\n`,
-  "utf8",
-);
+writeRunArtifact("remote-after.json", snapshot);
 
 const failed = managedAfter.filter((document) =>
   ["error", "paused"].includes(document.indexing_status),
@@ -314,22 +379,39 @@ const failed = managedAfter.filter((document) =>
 const completed = managedAfter.filter(
   (document) => document.indexing_status === "completed",
 );
-console.log(
-  JSON.stringify({
-    event: "finished",
-    expected: manifest.documents.length,
-    completed: completed.length,
-    failed: failed.map(compactDocument),
-    pending: managedAfter.filter(
-      (document) =>
-        !["completed", "error", "paused"].includes(document.indexing_status),
-    ).length,
-    totalWordCount: completed.reduce(
-      (total, document) => total + (document.word_count ?? 0),
-      0,
-    ),
-  }),
+const syncSummary = {
+  event: "finished",
+  runId,
+  datasetId,
+  manifestGeneratedAt: manifest.generatedAt,
+  expected: manifest.documents.length,
+  completed: completed.length,
+  failed: failed.map(compactDocument),
+  pending: managedAfter.filter(
+    (document) =>
+      !["completed", "error", "paused"].includes(document.indexing_status),
+  ).length,
+  totalWordCount: completed.reduce(
+    (total, document) => total + (document.word_count ?? 0),
+    0,
+  ),
+};
+writeRunArtifact("sync-summary.json", syncSummary);
+fs.writeFileSync(
+  path.join(generatedRoot, "latest-run.json"),
+  `${JSON.stringify(
+    {
+      runId,
+      runDirectory: path.relative(generatedRoot, runRoot),
+      completed: syncSummary.completed,
+      expected: syncSummary.expected,
+    },
+    null,
+    2,
+  )}\n`,
+  "utf8",
 );
+console.log(JSON.stringify(syncSummary));
 
 if (failed.length > 0 || completed.length !== manifest.documents.length) {
   process.exitCode = 2;

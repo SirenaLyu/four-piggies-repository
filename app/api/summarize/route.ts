@@ -1,5 +1,13 @@
 import { generateText } from "ai";
 import { chatClient, CHAT_MODEL } from "../../lib/ai-clients";
+import { guardApiRequest } from "../../lib/api-security";
+import {
+  createTelemetryContext,
+  errorMessage,
+  logEvent,
+  withRequestId,
+} from "../../lib/telemetry";
+import { readJsonBody, RequestBodyError } from "../../lib/request-body";
 
 const SYSTEM_PROMPT = `你是对话标题生成器。请根据下面的"用户问题"和"助手回答"，用 5 到 15 个汉字概括这次对话的主题。
 要求：
@@ -16,19 +24,46 @@ function sanitizeTitle(raw: string, fallback: string): string {
 }
 
 export async function POST(req: Request) {
-  let body: { messages?: SummarizeMessage[] };
-  try {
-    body = (await req.json()) as { messages?: SummarizeMessage[] };
-  } catch {
-    return Response.json({ error: "invalid json" }, { status: 400 });
+  const telemetry = createTelemetryContext(req, "summarize");
+  const startedAt = Date.now();
+  const respond = (response: Response) =>
+    withRequestId(response, telemetry.requestId);
+  const blocked = guardApiRequest(req, { scope: "summarize", defaultLimit: 80 });
+  if (blocked) {
+    logEvent(telemetry, "request.blocked", { status: blocked.status }, "warn");
+    return respond(blocked);
   }
 
-  const messages = body.messages ?? [];
+  let body: { messages?: SummarizeMessage[] };
+  try {
+    body = await readJsonBody<{ messages?: SummarizeMessage[] }>(req, 64 * 1024);
+  } catch (error) {
+    const requestError =
+      error instanceof RequestBodyError
+        ? error
+        : new RequestBodyError("invalid json", 400);
+    return respond(
+      Response.json({ error: requestError.message }, { status: requestError.status }),
+    );
+  }
+
+  const messages = Array.isArray(body.messages)
+    ? body.messages
+        .filter(
+          (message): message is SummarizeMessage =>
+            Boolean(message) &&
+            (message.role === "user" || message.role === "assistant") &&
+            typeof message.text === "string",
+        )
+        .slice(0, 10)
+    : [];
   const userMsg = messages.find((m) => m.role === "user");
   const assistantMsg = messages.find((m) => m.role === "assistant");
 
   if (!userMsg || !userMsg.text) {
-    return Response.json({ error: "user message required" }, { status: 400 });
+    return respond(
+      Response.json({ error: "user message required" }, { status: 400 }),
+    );
   }
 
   const userText = userMsg.text.slice(0, 4000);
@@ -42,12 +77,24 @@ export async function POST(req: Request) {
       prompt: `用户问题：${userText}\n\n助手回答：${assistantText}`,
     });
     const title = sanitizeTitle(result.text, userText);
-    return Response.json({ title });
+    logEvent(telemetry, "summarize.completed", {
+      durationMs: Date.now() - startedAt,
+      inputChars: userText.length + assistantText.length,
+    });
+    return respond(Response.json({ title }));
   } catch (e) {
     const fallback = sanitizeTitle(userText, userText);
-    return Response.json(
-      { title: fallback, warning: e instanceof Error ? e.message : "generateText failed" },
-      { status: 200 },
+    logEvent(
+      telemetry,
+      "summarize.fallback",
+      { durationMs: Date.now() - startedAt, error: errorMessage(e) },
+      "warn",
+    );
+    return respond(
+      Response.json(
+        { title: fallback, warning: errorMessage(e) },
+        { status: 200 },
+      ),
     );
   }
 }

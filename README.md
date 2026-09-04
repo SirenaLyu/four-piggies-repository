@@ -19,10 +19,10 @@
 - **受控 Agent**：目录须同时通过客户端授权与服务端根目录校验，写入和命令执行须逐次批准。
 - **知识库检索**：并发检索 8 个 Dify 数据集，去重排序后作为上下文。
 - **联网搜索**：通过 Dify/SearXNG 检索实时公开信息，执行日期规范化、主题相关度排序、可信来源优先、域名去重和风险内容过滤。
-- **历史会话**：会话列表与消息保存在浏览器 `localStorage`，可切换、展开、删除。
-- **按需导出**：用户点击后才生成 Markdown / Word / PDF / 文本 / 代码文件，避免每轮额外调用模型。
+- **历史会话**：会话列表与消息保存在浏览器 `localStorage`；附件只保留文件名等元信息，不保存 Base64 正文。
+- **按需导出**：用户点击后才生成 Markdown / Word / PDF / 文本 / 代码文件；中文 PDF 使用浏览器本地字体绘制，避免默认字体缺字。
 - **主题与外观**：浅色 / 深色 / 跟随系统，多套主题色可选。
-- **文件上传**：支持图片与常见文档作为上下文附件。
+- **文件上传**：支持图片、文本及 DOCX/XLSX/PPTX；Office Open XML 文件在浏览器内受限解压为纯文本后再发送，原始二进制不进入会话历史。
 
 ## 3. 技术栈
 
@@ -44,12 +44,17 @@ four-piggies-repository/
 │   │   ├── chat/route.ts          # 核心对话接口（流式 + 工具调用）
 │   │   ├── summarize/route.ts     # 会话标题自动总结
 │   │   └── export/route.ts        # 回答导出文件生成
-│   ├── components/                # 落地页 / 动画 / Logo / Markdown 渲染
+│   ├── components/                # 落地页、设置及拆分后的聊天界面组件
 │   ├── lib/
 │   │   ├── ai-clients.ts          # OpenAI 兼容客户端与模型名
+│   │   ├── chat-messages.ts        # 消息与附件规范化
+│   │   ├── chat-system-prompt.ts   # 按能力构建系统提示词
+│   │   ├── conversation-storage.ts # 容量安全的本地会话持久化
 │   │   ├── dify-knowledge.ts      # Dify 知识库检索（多数据集并发）
 │   │   ├── official-search.ts      # 中国政府网政策文件库补充检索
 │   │   ├── search-policy.ts        # 联网查询改写、排序、去重与安全过滤
+│   │   ├── web-search-tool.ts       # 联网工具、缓存、超时与熔断
+│   │   ├── telemetry.ts             # 结构化请求日志与请求 ID
 │   │   ├── export.ts              # 导出文件前端下载
 │   │   ├── markdown.ts            # Markdown 工具
 │   │   └── parse-llm-json.ts      # LLM JSON 解析
@@ -74,11 +79,15 @@ four-piggies-repository/
 | `CHAT_MODEL` | 对话模型，不设时默认 `deepseek-v4-flash` |
 | `CHAT_HISTORY_MESSAGES` | 送入模型的最近消息条数，默认 24、范围 6–50；不影响浏览器保存的完整记录 |
 | `CHAT_FALLBACK_MODEL` | 可选备用模型；与主模型不同时才启用网络/超时降级 |
+| `APP_ALLOWED_ORIGINS` | 反向代理或跨域前端可信来源；同源访问无需配置 |
+| `TRUST_PROXY_HEADERS` | 仅在可信代理会覆盖 `X-Forwarded-*` 时设为 true；默认忽略客户端可伪造的代理头 |
+| `API_RATE_LIMIT_*` | chat/export/summarize 的固定窗口限流配置 |
 | `DIFY_BASE_URL` | 自建 Dify 服务地址（结尾不带 `/v1`） |
 | `DIFY_KNOWLEDGE_API_KEY` | Dify 知识库 Dataset Key（`dataset-` 开头） |
 | `DATASET_IDS` | 8 个知识库数据集 ID，逗号分隔 |
 | `DIFY_DATASET_ROUTE_MAP` | 可选的数据集主题路由 JSON；使用项目内置 8 个数据集 ID 时可不配置 |
 | `DIFY_RETRIEVAL_TOP_K` | 每个知识库候选数，默认 5 |
+| `DIFY_RETRIEVAL_SEARCH_METHOD` | 可选强制检索方式；默认按查询动态选择 semantic 或 hybrid |
 | `DIFY_MAX_CONTEXT_CHUNKS` | 最终上下文片段上限，默认 12 |
 | `DIFY_RERANKING_ENABLED` | 是否启用 reranker，默认 true |
 | `DIFY_RERANKING_PROVIDER` / `DIFY_RERANKING_MODEL` | 覆盖默认 bge reranker |
@@ -98,6 +107,8 @@ four-piggies-repository/
 ### 6.1 一键启动（Windows）
 
 Windows 用户**直接双击 `start.bat`** 即可，脚本会自动完成以下步骤：
+
+> 若仓库位于外层兼容目录 `main/.codex-github-sync`，外层 `start.bat` 会自动转发到这个 Git 工作区；运行、测试和提交均以 `.codex-github-sync` 为唯一可信源码。
 
 1. 检查 Node.js 是否已安装（缺失则提示安装 Node.js 20+）。
 2. 检查 npm 是否可用。
@@ -135,11 +146,11 @@ node scripts/sync-wokepaike-dify.mjs --serial
 # 增量上传，并逐份等待索引完成
 node scripts/sync-wokepaike-dify.mjs --upload --serial
 
-# 数据变化后原位刷新课程类文档
-node scripts/sync-wokepaike-dify.mjs --upload --serial --refresh-category=courses
+# 数据变化后原位刷新课程与评课聚合文档
+node scripts/sync-wokepaike-dify.mjs --upload --serial --refresh-category=courses,reviews
 ```
 
-脚本读取 `DIFY_BASE_URL`、`DIFY_KNOWLEDGE_API_KEY` 和可选的 `WOKEPAIKE_DIFY_DATASET_ID`。批量索引采用可恢复的串行模式，避免同时提交大量文档压满 Dify 数据库连接池或嵌入服务。
+脚本读取 `DIFY_BASE_URL`、`DIFY_KNOWLEDGE_API_KEY` 和可选的 `WOKEPAIKE_DIFY_DATASET_ID`。批量索引采用可恢复的串行模式，避免同时提交大量文档压满 Dify 数据库连接池或嵌入服务。每次真实上传都会在 `generated/wokepaike-knowledge/runs/<run-id>/` 保存当次 manifest、待上传文档、远端更新前后快照、上传结果与最终摘要；`latest-run.json` 指向最近一次运行。运行快照保持与同步目录相同的文件布局，需要回滚时可先对该目录执行只读预检，再通过 `--dir=<run-directory> --upload --serial --refresh-category=<categories>` 重放旧版本。
 
 ## 7. 核心实现
 
@@ -164,11 +175,26 @@ node scripts/sync-wokepaike-dify.mjs --upload --serial --refresh-category=course
 - 正确读取 `record.score`，同时兼容 `data.records` 响应结构。
 - 若一次查询需要多个主题，由于不同知识库的 reranker 分数不可直接比较，按相关库的库内排名轮转选取并按内容去重。
 - 可通过 `DIFY_DATASET_SCORE_THRESHOLDS` 为每个数据集设置独立最低分数；缓存键包含数据集和检索配置，配置变化不会复用旧结果。
-- 默认显式使用 `semantic_search + bge-reranker-v2-m3 + top_k=5 + 无统一阈值`。
+- 普通问题使用 `semantic_search + bge-reranker-v2-m3 + top_k=5`；含精确课程号时自动使用 `hybrid_search + top_k=10`。
 - 单次请求 15 秒超时，单个数据集失败不影响其它。
 - 使用最多 200 项的 TTL/LRU 缓存；失败和空结果不缓存。
 
-### 7.3 联网搜索
+### 7.3 检索评测
+
+```bash
+# 离线路由回归，不需要 API Key
+npm run eval:retrieval
+
+# 对已配置的 Dify 发起真实召回验证
+npm run eval:retrieval:live
+
+# 在 npm run build 后启动生产服务并验证页面、同源防护和请求 ID
+npm run test:smoke
+```
+
+评测样例位于 `evals/retrieval-cases.json`。CI 会执行离线路由评测；真实评测只在有凭据的受控环境运行。
+
+### 7.4 联网搜索
 
 `web_search` 工具调用 Dify 工作流 `POST {DIFY_BASE_URL}/v1/workflows/run`：
 
@@ -180,16 +206,28 @@ node scripts/sync-wokepaike-dify.mjs --upload --serial --refresh-category=course
 - 工作流内部使用 SearXNG 搜索并整理成 Markdown。
 - 浏览器断开连接时会同步取消模型、Dify Workflow 和知识库请求，避免后台继续消耗资源。
 
-### 7.4 Agent 安全模型
+### 7.5 Agent 安全模型
 
 - 客户端目录授权只是申请，服务端再与 `AGENT_ALLOWED_ROOTS` 取交集并解析真实路径。
 - 读取与列目录可自动执行；写文件和执行命令需要界面批准。
 - 命令执行默认关闭，只允许绝对路径白名单程序，并使用 `spawn(..., shell: false)`。
 - Agent 工具调用后的结果不进入回答缓存，避免回放过期文件内容。
 
-### 7.5 系统提示词
+### 7.6 请求追踪与日志
+
+- 三个 API 均返回 `X-Request-ID`；安全格式的上游 ID 会沿用，否则服务端生成 UUID。
+- 对话步骤、知识库路由及各数据集耗时、联网重试/熔断和导出状态均输出单行 JSON 日志，并共享同一个请求 ID。
+- 日志只记录数量、耗时、状态和错误，不记录用户问题、附件正文、密钥或模型原始输出。
+
+### 7.7 系统提示词
 
 系统提示词按本轮开关动态生成，只声明已开启的能力，并要求模型不得声称使用未开启能力。
+
+### 7.8 浏览器安全响应头
+
+- 所有页面与 API 响应默认携带 CSP、`nosniff`、禁止嵌入、严格来源策略和最小权限策略。
+- CSP 仅允许同源脚本、连接与资源；为兼容当前内联主题初始化和 React 行内样式，保留 `unsafe-inline`，生产环境不启用 `unsafe-eval`。
+- HSTS 必须由确认已启用 HTTPS 的反向代理或托管平台设置，不能在本地 HTTP 开发服务上全局开启。
 
 ## 8. 已知限制
 
@@ -197,6 +235,8 @@ node scripts/sync-wokepaike-dify.mjs --upload --serial --refresh-category=course
 - 全网搜索容易命中"他校邀请中科大教授"之类内容，模型会诚实说明并给建议。
 - 对话 API、Dify、搜索引擎和嵌入服务均可能出现限流或延迟波动，应结合日志与监控判断故障位置。
 - 联网结果过滤是应用层兜底；仍建议在 Dify/SearXNG 工作流中开启 SafeSearch，并维护搜索引擎侧黑名单。
+- PDF 与旧版二进制 Office 格式暂不解析；扫描件也不做 OCR。DOCX/XLSX/PPTX 仅提取文本，不保留复杂排版、公式、图表或嵌入对象。
+- 当前限流保存在单个 Node.js 进程内；多实例部署应迁移到 Redis 等共享存储，并叠加学校统一身份认证。
 
 ## 9. 分支关系
 

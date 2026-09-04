@@ -2,6 +2,14 @@ import { generateText } from "ai";
 import { chatClient, CHAT_MODEL } from "../../lib/ai-clients";
 import { parseLlmJson } from "../../lib/parse-llm-json";
 import type { ExportFileDescriptor, ExportFileFormat } from "../../lib/export";
+import { guardApiRequest } from "../../lib/api-security";
+import {
+  createTelemetryContext,
+  errorMessage,
+  logEvent,
+  withRequestId,
+} from "../../lib/telemetry";
+import { readJsonBody, RequestBodyError } from "../../lib/request-body";
 
 const VALID_FORMATS: ExportFileFormat[] = ["code", "markdown", "docx", "pdf", "text"];
 
@@ -75,18 +83,43 @@ function validateFiles(raw: unknown): ExportFileDescriptor[] | null {
 }
 
 export async function POST(req: Request) {
-  let body: { messages?: ExportMessage[] };
-  try {
-    body = (await req.json()) as { messages?: ExportMessage[] };
-  } catch {
-    return Response.json({ error: "invalid json" }, { status: 400 });
+  const telemetry = createTelemetryContext(req, "export");
+  const startedAt = Date.now();
+  const respond = (response: Response) =>
+    withRequestId(response, telemetry.requestId);
+  const blocked = guardApiRequest(req, { scope: "export", defaultLimit: 20 });
+  if (blocked) {
+    logEvent(telemetry, "request.blocked", { status: blocked.status }, "warn");
+    return respond(blocked);
   }
 
-  const messages = (body.messages ?? []).filter(
-    (m) => (m.role === "user" || m.role === "assistant") && typeof m.text === "string",
-  );
+  let body: { messages?: ExportMessage[] };
+  try {
+    body = await readJsonBody<{ messages?: ExportMessage[] }>(req, 2 * 1024 * 1024);
+  } catch (error) {
+    const requestError =
+      error instanceof RequestBodyError
+        ? error
+        : new RequestBodyError("invalid json", 400);
+    return respond(
+      Response.json({ error: requestError.message }, { status: requestError.status }),
+    );
+  }
+
+  const messages = Array.isArray(body.messages)
+    ? body.messages
+        .filter(
+          (message): message is ExportMessage =>
+            Boolean(message) &&
+            (message.role === "user" || message.role === "assistant") &&
+            typeof message.text === "string",
+        )
+        .slice(0, 100)
+    : [];
   if (messages.length === 0) {
-    return Response.json({ error: "messages required" }, { status: 400 });
+    return respond(
+      Response.json({ error: "messages required" }, { status: 400 }),
+    );
   }
 
   // 每条消息截到 20000 字，避免请求体过大
@@ -106,23 +139,39 @@ export async function POST(req: Request) {
     });
     const parsed = parseLlmJson<{ files: unknown }>(result.text);
     if (!parsed.ok) {
-      return Response.json(
-        { error: "model did not return valid JSON", raw: parsed.raw },
-        { status: 422 },
+      logEvent(telemetry, "export.invalid_model_json", {}, "warn");
+      return respond(
+        Response.json(
+          { error: "model did not return valid JSON" },
+          { status: 422 },
+        ),
       );
     }
     const files = validateFiles(parsed.value.files);
     if (!files) {
-      return Response.json(
-        { error: "no valid files in model output", raw: result.text },
-        { status: 422 },
+      logEvent(telemetry, "export.invalid_files", {}, "warn");
+      return respond(
+        Response.json(
+          { error: "no valid files in model output" },
+          { status: 422 },
+        ),
       );
     }
-    return Response.json({ files });
+    logEvent(telemetry, "export.completed", {
+      durationMs: Date.now() - startedAt,
+      inputChars: transcript.length,
+      fileCount: files.length,
+    });
+    return respond(Response.json({ files }));
   } catch (e) {
-    return Response.json(
-      { error: e instanceof Error ? e.message : "generateText failed" },
-      { status: 500 },
+    logEvent(
+      telemetry,
+      "export.failed",
+      { durationMs: Date.now() - startedAt, error: errorMessage(e) },
+      "error",
+    );
+    return respond(
+      Response.json({ error: errorMessage(e) }, { status: 500 }),
     );
   }
 }

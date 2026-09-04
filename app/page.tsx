@@ -8,20 +8,20 @@ import {
   type UIMessage,
 } from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  downloadExportFile,
-  type ExportFileDescriptor,
-} from "./lib/export";
-import { MarkdownRenderer } from "./components/MarkdownRenderer";
+import type { ExportFileDescriptor } from "./lib/export";
 import { Logo } from "./components/Logo";
 import { LandingPage } from "./components/LandingPage";
-import { DirectoryAuthCard } from "./components/chat/DirectoryAuthCard";
-import { ToolApprovalCard } from "./components/chat/ToolApprovalCard";
+import { ChatComposer } from "./components/chat/ChatComposer";
+import { ChatTranscript } from "./components/chat/ChatTranscript";
+import { ConversationSidebar } from "./components/chat/ConversationSidebar";
 import {
-  getPendingApprovals,
+  SettingsDrawer,
+  type UserProfileDraft,
+} from "./components/SettingsDrawer";
+import { UserProfilePrompt } from "./components/UserProfilePrompt";
+import {
   hasPendingApprovals,
   stripPendingApprovals,
-  summarizeApproval,
 } from "./components/chat/approval-parts";
 import {
   addAuthorizedDirectory,
@@ -34,6 +34,23 @@ import {
   type AssistantCapabilities,
 } from "./lib/capabilities";
 import {
+  deleteConversationStorage,
+  loadConversationMessages,
+  loadConversations,
+  saveConversationMessages,
+  saveConversations,
+  type ConversationSummary,
+} from "./lib/conversation-storage";
+import {
+  estimateDataUrlBytes as estimateAttachmentDataUrlBytes,
+  inferAttachmentMediaType,
+  validateAttachment,
+} from "./lib/attachment-policy";
+import {
+  extractOfficeAttachmentText,
+  isOfficeAttachmentMediaType,
+} from "./lib/office-attachment";
+import {
   buildPersonalizedSuggestions,
   EMPTY_USER_PROFILE,
   isCompleteUserProfile,
@@ -41,41 +58,25 @@ import {
   type UserProfile,
 } from "./lib/user-profile";
 
-// ===== 主题色预设 =====
-const THEME_COLORS = [
-  { key: "blue",   label: "科大蓝", color: "#0046ad" },
-  { key: "purple", label: "紫罗兰", color: "#7c3aed" },
-  { key: "teal",   label: "青碧",   color: "#0d9488" },
-  { key: "rose",   label: "玫瑰红", color: "#e11d48" },
-] as const;
-
-const CAPABILITY_OPTIONS: Array<{
-  key: keyof AssistantCapabilities;
-  label: string;
-  description: string;
-}> = [
-  { key: "knowledgeBase", label: "知识库检索", description: "查询校园政策、办事流程和校内资料" },
-  { key: "webSearch", label: "联网搜索", description: "查询最新通知、活动和公开网络信息" },
-  { key: "agent", label: "Agent 能力", description: "读取授权目录；写入和命令执行仍需确认" },
-];
-
-// ===== 本地会话持久化 =====
-
-type ConversationSummary = {
-  id: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-};
-
-const STORAGE_KEY = "campus-ai-conversations";
 const CAPABILITIES_KEY = "campus-ai-capabilities";
 const USER_PROFILE_KEY = "campus-ai-user-profile";
 
-type UserProfileDraft = {
-  age: string;
-  major: string;
-};
+function savePreference(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (error) {
+    console.warn(`[preferences] 无法保存 ${key}：`, error);
+  }
+}
+
+function loadPreference(key: string, fallback: string): string {
+  try {
+    return window.localStorage.getItem(key) ?? fallback;
+  } catch (error) {
+    console.warn(`[preferences] 无法读取 ${key}：`, error);
+    return fallback;
+  }
+}
 
 function loadCapabilities(): AssistantCapabilities {
   if (typeof window === "undefined") return { ...DEFAULT_CAPABILITIES };
@@ -92,57 +93,15 @@ function loadUserProfile(): UserProfile {
   if (typeof window === "undefined") return { ...EMPTY_USER_PROFILE };
   try {
     return normalizeUserProfile(
-      JSON.parse(window.localStorage.getItem(USER_PROFILE_KEY) ?? "null"),
+      JSON.parse(loadPreference(USER_PROFILE_KEY, "null")),
     );
   } catch {
     return { ...EMPTY_USER_PROFILE };
   }
 }
 
-function saveUserProfile(profile: UserProfile) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(profile));
-}
-
-function loadConversations(): ConversationSummary[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as ConversationSummary[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveConversations(list: ConversationSummary[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-}
-
-function loadConversationMessages(id: string): UIMessage[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(`${STORAGE_KEY}:${id}`);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as UIMessage[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveConversationMessages(id: string, messages: UIMessage[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(`${STORAGE_KEY}:${id}`, JSON.stringify(messages));
-}
-
-function deleteConversationStorage(id: string) {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(`${STORAGE_KEY}:${id}`);
-  const list = loadConversations().filter((c) => c.id !== id);
-  saveConversations(list);
+function saveUserProfile(profile: UserProfile): void {
+  savePreference(USER_PROFILE_KEY, JSON.stringify(profile));
 }
 
 function makeId() {
@@ -162,47 +121,41 @@ function getMessageText(m: UIMessage) {
     .join("");
 }
 
-function getMessageFiles(m: UIMessage): FileUIPart[] {
-  return m.parts.filter((p) => p.type === "file") as FileUIPart[];
-}
-
-function isImage(mediaType: string) {
-  return mediaType.startsWith("image/");
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-// 将 File 转为带 data URL 的 FileUIPart
-function fileToDataUrl(file: File): Promise<FileUIPart> {
+// 将受支持的 File 转为带 data URL 的 FileUIPart。
+async function fileToDataUrl(file: File): Promise<FileUIPart> {
+  const mediaType = inferAttachmentMediaType(file);
+  if (!mediaType) throw new Error(`不支持的附件格式：${file.name}`);
+  if (isOfficeAttachmentMediaType(mediaType)) {
+    const text = await extractOfficeAttachmentText(file);
+    return {
+      type: "file",
+      mediaType: "text/markdown",
+      filename: `${file.name}.txt`,
+      url: `data:text/markdown;charset=utf-8,${encodeURIComponent(text)}`,
+    };
+  }
+  if (mediaType.startsWith("text/")) {
+    const text = await file.text();
+    return {
+      type: "file",
+      mediaType,
+      filename: file.name,
+      url: `data:${mediaType};charset=utf-8,${encodeURIComponent(text)}`,
+    };
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(reader.error);
     reader.onload = () => {
       resolve({
         type: "file",
-        mediaType: file.type || "application/octet-stream",
+        mediaType,
         filename: file.name,
-        url: String(reader.result),
+        url: String(reader.result).replace(/^data:[^;,]*/, `data:${mediaType}`),
       });
     };
     reader.readAsDataURL(file);
   });
-}
-
-function formatTime(ts: number) {
-  const d = new Date(ts);
-  const now = new Date();
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  if (sameDay) return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // ===== 主组件 =====
@@ -217,7 +170,6 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("chat") === "1" || params.get("enter") === "1") {
       // URL 查询参数是浏览器外部状态，只在首次挂载时同步一次。
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowLanding(false);
     }
   }, []);
@@ -225,12 +177,16 @@ export default function Home() {
   const [activeId, setActiveId] = useState<string>(() => generateChatId());
   const [hydrated, setHydrated] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<FileUIPart[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedConvos, setExpandedConvos] = useState<Set<string>>(new Set());
   const [exportsByMessage, setExportsByMessage] = useState<
     Record<string, ExportFileDescriptor[]>
   >({});
   const [exportBusy, setExportBusy] = useState<Set<string>>(new Set());
+  const [exportErrorsByMessage, setExportErrorsByMessage] = useState<
+    Record<string, string>
+  >({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [skipIntro, setSkipIntro] = useState(false);
   const [darkMode, setDarkMode] = useState<"auto" | "light" | "dark">("auto");
@@ -262,7 +218,6 @@ export default function Home() {
   // 初始化时从 localStorage 读取会话列表
   useEffect(() => {
     // 从外部存储（localStorage）同步会话列表到 React 状态
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setConversations(loadConversations());
     setHydrated(true);
   }, []);
@@ -270,15 +225,17 @@ export default function Home() {
   // 读取设置偏好
   useEffect(() => {
     // localStorage 是外部状态源，仅在首次挂载时同步一次。
-    /* eslint-disable react-hooks/set-state-in-effect */
-    const s = localStorage.getItem("campus-skip-intro");
+    const s = loadPreference("campus-skip-intro", "false");
     if (s === "true") {
       setSkipIntro(true);
       setShowLanding(false);
     }
-    const d = (localStorage.getItem("campus-dark-mode") || "auto") as "auto" | "light" | "dark";
+    const d = loadPreference("campus-dark-mode", "auto") as
+      | "auto"
+      | "light"
+      | "dark";
     setDarkMode(d);
-    const c = localStorage.getItem("campus-theme-color") || "blue";
+    const c = loadPreference("campus-theme-color", "blue");
     setThemeColor(c);
     setCapabilities(loadCapabilities());
     setAuthorizedDirs(loadAuthorizedDirs());
@@ -289,24 +246,23 @@ export default function Home() {
       major: storedProfile.major,
     });
     setProfilePromptOpen(!isCompleteUserProfile(storedProfile));
-    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   // 持久化设置
   useEffect(() => {
-    localStorage.setItem("campus-skip-intro", String(skipIntro));
+    savePreference("campus-skip-intro", String(skipIntro));
   }, [skipIntro]);
   useEffect(() => {
-    localStorage.setItem("campus-dark-mode", darkMode);
+    savePreference("campus-dark-mode", darkMode);
     document.documentElement.setAttribute("data-theme", darkMode === "auto" ? "" : darkMode);
     if (darkMode === "auto") document.documentElement.removeAttribute("data-theme");
   }, [darkMode]);
   useEffect(() => {
-    localStorage.setItem("campus-theme-color", themeColor);
+    savePreference("campus-theme-color", themeColor);
     document.documentElement.setAttribute("data-theme-color", themeColor);
   }, [themeColor]);
   useEffect(() => {
-    localStorage.setItem(CAPABILITIES_KEY, JSON.stringify(capabilities));
+    savePreference(CAPABILITIES_KEY, JSON.stringify(capabilities));
   }, [capabilities]);
 
   // 同步 ref，避免 onFinish 闭包陈旧
@@ -359,6 +315,12 @@ export default function Home() {
       if (exportInFlightRef.current.has(assistantMessageId)) return;
       exportInFlightRef.current.add(assistantMessageId);
       setExportBusy((prev) => new Set(prev).add(assistantMessageId));
+      setExportErrorsByMessage((prev) => {
+        if (!prev[assistantMessageId]) return prev;
+        const next = { ...prev };
+        delete next[assistantMessageId];
+        return next;
+      });
       const payload = {
         messages: msgs
           .filter((m) => m.role === "user" || m.role === "assistant")
@@ -370,12 +332,23 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        if (!res.ok) return;
-        const data = (await res.json()) as { files?: ExportFileDescriptor[] };
-        if (!data.files || data.files.length === 0) return;
+        const data = (await res.json().catch(() => ({}))) as {
+          files?: ExportFileDescriptor[];
+          error?: string;
+        };
+        if (!res.ok) {
+          throw new Error(data.error || `导出服务返回 HTTP ${res.status}`);
+        }
+        if (!data.files || data.files.length === 0) {
+          throw new Error("导出服务没有生成可下载文件");
+        }
         setExportsByMessage((prev) => ({ ...prev, [assistantMessageId]: data.files! }));
-      } catch {
-        // 静默失败
+      } catch (error) {
+        setExportErrorsByMessage((prev) => ({
+          ...prev,
+          [assistantMessageId]:
+            error instanceof Error ? error.message : "导出失败，请稍后重试",
+        }));
       } finally {
         exportInFlightRef.current.delete(assistantMessageId);
         setExportBusy((prev) => {
@@ -433,12 +406,6 @@ export default function Home() {
   });
 
   const isLoading = status === "submitted" || status === "streaming";
-  const lastMessage = messages.at(-1);
-  const showProcessingIndicator =
-    isLoading &&
-    (!lastMessage ||
-      lastMessage.role === "user" ||
-      getMessageText(lastMessage).trim().length === 0);
   const hasPendingApproval = messages.some(hasPendingApprovals);
   const capabilityControlsDisabled = isLoading || hasPendingApproval;
 
@@ -549,23 +516,38 @@ export default function Home() {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     const picked: FileUIPart[] = [];
+    const errors: string[] = [];
+    let acceptedCount = pendingFiles.length;
+    let acceptedBytes = pendingFiles.reduce(
+      (total, file) => total + estimateAttachmentDataUrlBytes(file.url),
+      0,
+    );
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
-      // 大小限制 10MB
-      if (f.size > 10 * 1024 * 1024) continue;
+      const validationError = validateAttachment(f, acceptedCount, acceptedBytes);
+      if (validationError) {
+        errors.push(validationError);
+        continue;
+      }
       try {
         picked.push(await fileToDataUrl(f));
-      } catch {
-        // 读取失败则跳过
+        acceptedCount += 1;
+        acceptedBytes += f.size;
+      } catch (error) {
+        errors.push(
+          `${f.name}：读取失败（${error instanceof Error ? error.message : String(error)}）。`,
+        );
       }
     }
-    setPendingFiles((prev) => [...prev, ...picked]);
+    if (picked.length > 0) setPendingFiles((prev) => [...prev, ...picked]);
+    setAttachmentError(errors.length > 0 ? errors.join(" ") : null);
     // 清空 input，便于重复选择同一文件
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const removePendingFile = (index: number) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
+    setAttachmentError(null);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -583,6 +565,7 @@ export default function Home() {
     sentConvoIdRef.current = activeId;
     setInput("");
     setPendingFiles([]);
+    setAttachmentError(null);
   };
 
   const handleSuggestion = (text: string) => {
@@ -628,181 +611,35 @@ export default function Home() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
-      {/* 左侧历史会话栏 */}
-      <aside
-        className={`${
-          sidebarOpen ? "w-72" : "w-0"
-        } shrink-0 transition-all duration-200 overflow-hidden bg-surface neu-raised flex flex-col`}
-      >
-        <div className="w-72 h-full flex flex-col">
-          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-foreground/80">历史会话</h2>
-            <button
-              type="button"
-              onClick={startNewConversation}
-              className="text-xs px-3 py-1.5 rounded-lg neu-card text-primary-600 hover:text-primary-500 transition-all"
-            >
-              + 新对话
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {conversations.length === 0 && (
-              <div className="px-4 py-6 text-center text-xs text-foreground/40">
-                还没有会话记录
-              </div>
-            )}
-            {conversations.map((c) => {
-              const isActive = c.id === activeId;
-              const isExpanded = expandedConvos.has(c.id);
-              // 从 localStorage 读取该会话的用户问题节点
-              const convoMessages = hydrated ? loadConversationMessages(c.id) : [];
-              const userNodes = convoMessages
-                .filter((m) => m.role === "user")
-                .map((m) => ({
-                  id: m.id,
-                  text: getMessageText(m).trim(),
-                }))
-                .filter((n) => n.text.length > 0);
-              return (
-                <div
-                  key={c.id}
-                  className={`group border-b border-border transition-colors ${
-                    isActive ? "bg-primary-50" : "hover:bg-muted"
-                  }`}
-                >
-                  <div
-                    onClick={() => selectConversation(c.id)}
-                    className={`px-3 py-3 cursor-pointer flex items-start gap-2 ${
-                      isActive ? "text-primary-600" : "text-foreground/80"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleConvoExpanded(c.id);
-                      }}
-                      className={`mt-0.5 w-4 h-4 flex items-center justify-center text-xs text-foreground/60 hover:text-foreground transition-transform ${
-                        isExpanded ? "rotate-90" : ""
-                      }`}
-                      aria-label={isExpanded ? "收起" : "展开"}
-                    >
-                      ▶
-                    </button>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{c.title}</div>
-                      <div className="text-[11px] text-foreground/40 mt-0.5">
-                        {formatTime(c.updatedAt)} · {userNodes.length} 个问题
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeConversation(c.id);
-                      }}
-                      className="opacity-0 group-hover:opacity-100 text-foreground/40 hover:text-danger text-xs px-1"
-                      aria-label="删除会话"
-                    >
-                      ×
-                    </button>
-                  </div>
-                  {isExpanded && (
-                    <div className="pb-2 pl-9 pr-3">
-                      {userNodes.length === 0 ? (
-                        <div className="text-[11px] text-foreground/40 py-1">
-                          暂无问题
-                        </div>
-                      ) : (
-                        <div className="relative ml-2 pl-4 border-l-2 border-primary-100 space-y-1">
-                          {userNodes.map((n, i) => (
-                            <button
-                              key={n.id}
-                              type="button"
-                              onClick={() => {
-                                if (c.id !== activeId) selectConversation(c.id);
-                                // 切换会话后立即滚动可能未挂载，延迟一帧再尝试
-                                setTimeout(() => scrollToMessage(n.id), 50);
-                              }}
-                              className="group/node block w-full text-left text-xs text-foreground/80 hover:text-primary-600 hover:bg-primary-50 px-2 py-1.5 rounded transition-colors relative"
-                              title={n.text}
-                            >
-                              <span className="absolute -left-[21px] top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-primary-400 ring-2 ring-white group-hover/node:bg-primary-600 transition-colors" />
-                              <span className="truncate font-medium">
-                                {i + 1}. {n.text.slice(0, 24)}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          {capabilities.agent && (
-            <div className="border-t border-border px-4 py-3">
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-xs font-medium text-foreground/70">🔐 授权目录</span>
-                <button
-                  type="button"
-                  onClick={() => setShowAddDirectory((visible) => !visible)}
-                  className="text-xs text-primary-600 hover:text-primary-500"
-                >
-                  {showAddDirectory ? "取消" : "+ 添加"}
-                </button>
-              </div>
-              {authorizedDirs.length === 0 ? (
-                <p className="text-[11px] text-foreground/40">未授权目录，AI 暂无法读取本地文件</p>
-              ) : (
-                <div className="max-h-28 space-y-1 overflow-y-auto">
-                  {authorizedDirs.map((directory) => (
-                    <div key={directory} className="flex items-center gap-1 text-[11px] text-foreground/70">
-                      <span className="flex-1 truncate" title={directory}>{directory}</span>
-                      <button
-                        type="button"
-                        onClick={() => setAuthorizedDirs(removeAuthorizedDirectory(directory))}
-                        className="px-0.5 text-foreground/40 hover:text-danger"
-                        aria-label={`移除授权目录 ${directory}`}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {showAddDirectory && (
-                <DirectoryAuthCard
-                  onAllow={(directory) => {
-                    setAuthorizedDirs(addAuthorizedDirectory(directory));
-                    setShowAddDirectory(false);
-                  }}
-                  onCancel={() => setShowAddDirectory(false)}
-                />
-              )}
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(false)}
-            className="px-4 py-2 text-xs text-foreground/60 border-t border-border hover:bg-muted"
-          >
-            收起侧栏
-          </button>
-        </div>
-      </aside>
-
-      {/* 收起状态下展开按钮 */}
-      {!sidebarOpen && (
-        <button
-          type="button"
-          onClick={() => setSidebarOpen(true)}
-          className="absolute top-3 left-3 z-10 bg-surface border border-border rounded-md px-2 py-1 text-xs text-foreground/70 shadow-sm hover:bg-muted"
-        >
-          ☰ 展开
-        </button>
-      )}
+      <ConversationSidebar
+        open={sidebarOpen}
+        hydrated={hydrated}
+        conversations={conversations}
+        activeId={activeId}
+        activeMessages={messages}
+        expandedConversations={expandedConvos}
+        agentEnabled={capabilities.agent}
+        authorizedDirectories={authorizedDirs}
+        showAddDirectory={showAddDirectory}
+        onNewConversation={startNewConversation}
+        onSelectConversation={selectConversation}
+        onRemoveConversation={removeConversation}
+        onToggleConversation={toggleConvoExpanded}
+        onScrollToMessage={scrollToMessage}
+        onOpen={() => setSidebarOpen(true)}
+        onClose={() => setSidebarOpen(false)}
+        onToggleAddDirectory={() =>
+          setShowAddDirectory((visible) => !visible)
+        }
+        onAllowDirectory={(directory) => {
+          setAuthorizedDirs(addAuthorizedDirectory(directory));
+          setShowAddDirectory(false);
+        }}
+        onRemoveDirectory={(directory) =>
+          setAuthorizedDirs(removeAuthorizedDirectory(directory))
+        }
+        onCancelAddDirectory={() => setShowAddDirectory(false)}
+      />
 
       {/* 主聊天区 */}
       <main className="flex-1 flex flex-col min-w-0">
@@ -844,607 +681,72 @@ export default function Home() {
           </div>
         </header>
 
-        {/* 消息列表 */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-          {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full select-none">
-              <Logo size={64} className="mb-4" />
-              <h2 className="text-xl font-semibold text-foreground">你好！我是科大精灵</h2>
-              <p className="text-sm text-foreground/60 mt-2">有什么关于学校的问题都可以问我</p>
-              {isCompleteUserProfile(userProfile) && (
-                <button
-                  type="button"
-                  onClick={openSettings}
-                  className="mt-3 rounded-full border border-primary-200 bg-primary-50 px-3 py-1 text-xs text-primary-700 transition-colors hover:bg-primary-100"
-                >
-                  已按 {userProfile.age} 岁 · {userProfile.major} 定制
-                </button>
-              )}
-              <div className="columns-2 gap-3 mt-8 w-[430px] max-w-full">
-                {suggestions.map((s) => (
-                  <button
-                    key={s.text}
-                    onClick={() => handleSuggestion(s.text)}
-                    className="neu-card w-full mb-3 px-5 py-4 text-sm font-medium text-foreground/85 text-left break-words rounded-2xl"
-                  >
-                    {s.text}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+        <ChatTranscript
+          messages={messages}
+          suggestions={suggestions}
+          profileLabel={
+            isCompleteUserProfile(userProfile)
+              ? `${userProfile.age} 岁 · ${userProfile.major}`
+              : null
+          }
+          exportsByMessage={exportsByMessage}
+          exportBusy={exportBusy}
+          exportErrorsByMessage={exportErrorsByMessage}
+          loading={isLoading}
+          messageRefs={messageRefs}
+          messagesEndRef={messagesEndRef}
+          onSuggestion={handleSuggestion}
+          onOpenSettings={openSettings}
+          onApprovalResponse={(approvalId, approved) =>
+            addToolApprovalResponse({
+              id: approvalId,
+              approved,
+              reason: approved ? "用户在界面确认" : "用户拒绝",
+            })
+          }
+        />
 
-          {messages.map((m) => {
-            const text = getMessageText(m);
-            const files = getMessageFiles(m);
-            const exportsForThis = exportsByMessage[m.id] ?? [];
-            const isExportBusy = exportBusy.has(m.id);
-            const pendingApprovals = getPendingApprovals(m);
-            return (
-              <div
-                key={m.id}
-                ref={(el) => {
-                  if (el) messageRefs.current.set(m.id, el);
-                  else messageRefs.current.delete(m.id);
-                }}
-                className={`flex flex-col message-in ${
-                  m.role === "user" ? "items-end" : "items-start"
-                }`}
-              >
-                <div
-                  className={`flex ${
-                    m.role === "user" ? "justify-end" : "justify-start"
-                  } w-full`}
-                >
-                  {m.role !== "user" && (
-                    <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm mr-2 shrink-0">
-                      <Logo size={20} color="#FFFFFF" accent="#8FC0FF" />
-                    </div>
-                  )}
-
-                  <div
-                    className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed break-words ${
-                      m.role === "user"
-                        ? "bg-primary-600 text-white rounded-br-md"
-                        : "neu-raised bg-surface text-foreground rounded-bl-md"
-                    }`}
-                  >
-                    {files.length > 0 && (
-                      <div className="mb-2 flex flex-wrap gap-2">
-                        {files.map((f, i) => (
-                          <FilePreview key={i} file={f} fromUser={m.role === "user"} />
-                        ))}
-                      </div>
-                    )}
-                    {text && (
-                      <MarkdownRenderer
-                        content={text}
-                        variant={m.role === "user" ? "user" : "assistant"}
-                      />
-                    )}
-                  </div>
-
-                  {m.role === "user" && (
-                    <div className="w-8 h-8 bg-ink-400 rounded-full flex items-center justify-center text-white text-sm ml-2 shrink-0">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                    </div>
-                  )}
-                </div>
-
-                {m.role === "assistant" && pendingApprovals.length > 0 && (
-                  <div className="ml-10 mt-2 flex flex-col gap-2">
-                    {pendingApprovals.map((approval) => (
-                      <ToolApprovalCard
-                        key={approval.approvalId || approval.toolCallId}
-                        toolName={approval.toolName}
-                        summary={summarizeApproval(approval)}
-                        onRespond={(approved) =>
-                          addToolApprovalResponse({
-                            id: approval.approvalId,
-                            approved,
-                            reason: approved ? "用户在界面确认" : "用户拒绝",
-                          })
-                        }
-                      />
-                    ))}
-                  </div>
-                )}
-
-                {/* AI 回复：AI 生成的导出文件卡片（代码块下载按钮已内置在 MarkdownRenderer 里） */}
-                {m.role === "assistant" && exportsForThis.length > 0 && (
-                  <div className="ml-10 mt-2 flex flex-wrap gap-2">
-                    {exportsForThis.map((f, i) => (
-                      <ExportFileCard key={i} file={f} />
-                    ))}
-                  </div>
-                )}
-
-                {/* AI 回复：导出加载中提示 */}
-                {m.role === "assistant" && isExportBusy && exportsForThis.length === 0 && (
-                  <div className="ml-10 mt-2 text-[11px] text-foreground/40 flex items-center gap-1.5">
-                    <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:0ms]" />
-                    <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:150ms]" />
-                    <span className="w-2 h-2 bg-primary-400 rounded-full animate-bounce [animation-delay:300ms]" />
-                    <span className="ml-1">正在生成可导出文件…</span>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          {/* AI 正在输入动画 */}
-          {showProcessingIndicator && (
-            <div className="flex justify-start message-in">
-              <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm mr-2 shrink-0">
-                <Logo size={20} color="#FFFFFF" accent="#8FC0FF" />
-              </div>
-              <div className="bg-surface px-4 py-3 rounded-2xl rounded-bl-md shadow-sm flex items-center gap-2">
-                <div className="flex gap-1 mr-1">
-                  <span className="w-1.5 h-1.5 bg-primary-400 rounded-full thinking-dot [animation-delay:0ms]" />
-                  <span className="w-1.5 h-1.5 bg-primary-400 rounded-full thinking-dot [animation-delay:150ms]" />
-                  <span className="w-1.5 h-1.5 bg-primary-400 rounded-full thinking-dot [animation-delay:300ms]" />
-                </div>
-                <span className="text-xs text-foreground/60">
-                  {status === "submitted" ? "正在理解问题…" : "正在检索并组织答案…"}
-                </span>
-              </div>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* 待上传文件预览条 */}
-        {pendingFiles.length > 0 && (
-          <div className="bg-surface border-t border-border px-4 py-2 flex flex-wrap gap-2 shrink-0">
-            {pendingFiles.map((f, i) => (
-              <div
-                key={i}
-                className="relative flex items-center gap-2 bg-muted rounded-md px-2 py-1 pr-6 text-xs text-foreground/80"
-              >
-                {isImage(f.mediaType) && f.url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={f.url}
-                    alt={f.filename ?? ""}
-                    className="w-8 h-8 object-cover rounded"
-                  />
-                ) : (
-                  <span className="text-base">📄</span>
-                )}
-                <span className="max-w-[120px] truncate">{f.filename}</span>
-                <button
-                  type="button"
-                  onClick={() => removePendingFile(i)}
-                  className="absolute top-0 right-0 text-foreground/40 hover:text-danger px-1"
-                  aria-label="移除"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* 底部输入区 */}
-        <form
+        <ChatComposer
+          input={input}
+          pendingFiles={pendingFiles}
+          attachmentError={attachmentError}
+          loading={isLoading}
+          fileInputRef={fileInputRef}
+          onInputChange={setInput}
+          onFilePick={handleFilePick}
+          onRemovePendingFile={removePendingFile}
           onSubmit={handleSubmit}
-          className="bg-surface border-t border-border px-4 py-3 flex items-center gap-2 shrink-0"
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept="image/*,.pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.pptx"
-            onChange={handleFilePick}
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isLoading}
-            className="w-10 h-10 bg-muted rounded-full flex items-center justify-center text-foreground/70 shrink-0 hover:bg-border disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            aria-label="上传文件"
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-            </svg>
-          </button>
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="输入你的问题..."
-            className="flex-1 neu-pressed bg-surface text-foreground placeholder:text-foreground/60 rounded-full px-4 py-2.5 text-sm outline-none transition-all"
-            disabled={isLoading}
-          />
-          <button
-            type="submit"
-            disabled={isLoading || (!input.trim() && pendingFiles.length === 0)}
-            className="w-10 h-10 bg-primary-600 rounded-full flex items-center justify-center text-white shrink-0 hover:bg-primary-500 hover:scale-105 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
-        </form>
+        />
       </main>
 
-      {/* 设置抽屉 */}
-      {settingsOpen && (
-        <>
-          <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setSettingsOpen(false)} />
-          <div className="fixed top-0 right-0 h-full w-80 bg-surface border-l border-border z-50 shadow-xl flex flex-col">
-            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">设置</h3>
-              <button type="button" onClick={() => setSettingsOpen(false)} className="text-foreground/60 hover:text-foreground text-lg leading-none">&times;</button>
-            </div>
-            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  commitUserProfile();
-                }}
-              >
-                <label className="mb-2 block text-xs font-medium text-foreground/70">
-                  个人资料
-                </label>
-                <div className="grid grid-cols-[92px_1fr] gap-2">
-                  <input
-                    type="number"
-                    min={10}
-                    max={100}
-                    inputMode="numeric"
-                    value={profileDraft.age}
-                    onChange={(event) =>
-                      setProfileDraft((current) => ({
-                        ...current,
-                        age: event.target.value,
-                      }))
-                    }
-                    placeholder="年龄"
-                    aria-label="年龄"
-                    className="rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none focus:border-primary-400"
-                  />
-                  <input
-                    type="text"
-                    maxLength={50}
-                    value={profileDraft.major}
-                    onChange={(event) =>
-                      setProfileDraft((current) => ({
-                        ...current,
-                        major: event.target.value,
-                      }))
-                    }
-                    placeholder="专业，如计算机科学"
-                    aria-label="专业"
-                    className="min-w-0 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none focus:border-primary-400"
-                  />
-                </div>
-                {profileError && (
-                  <p className="mt-2 text-[11px] text-danger">{profileError}</p>
-                )}
-                <div className="mt-2 flex items-center justify-between gap-3">
-                  <p className="text-[11px] leading-4 text-foreground/40">
-                    保存在当前浏览器，提问时用于定制回答。
-                  </p>
-                  <button
-                    type="submit"
-                    className="shrink-0 rounded-md bg-primary-600 px-3 py-1.5 text-xs text-white hover:bg-primary-500"
-                  >
-                    保存
-                  </button>
-                </div>
-              </form>
-              <div>
-                <label className="mb-2 block text-xs font-medium text-foreground/70">AI 能力边界</label>
-                <div className="space-y-2">
-                  {CAPABILITY_OPTIONS.map((option) => (
-                    <label
-                      key={option.key}
-                      className={`flex items-start gap-3 rounded-lg border border-border px-3 py-2.5 ${
-                        capabilityControlsDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={capabilities[option.key]}
-                        disabled={capabilityControlsDisabled}
-                        onChange={(event) =>
-                          setCapabilities((current) => ({
-                            ...current,
-                            [option.key]: event.target.checked,
-                          }))
-                        }
-                        className="mt-0.5 h-4 w-4 rounded border-border accent-primary-600"
-                      />
-                      <span>
-                        <span className="block text-sm font-medium text-foreground/80">{option.label}</span>
-                        <span className="mt-0.5 block text-[11px] leading-4 text-foreground/45">{option.description}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-                <p className="mt-2 text-[11px] leading-4 text-foreground/40">
-                  关闭的能力不会发送给模型，也不会在服务端注册对应工具。
-                  {capabilityControlsDisabled ? " 请等待当前操作结束后再修改。" : ""}
-                </p>
-              </div>
-              {/* 开场动画 */}
-              <div>
-                <label className="text-xs font-medium text-foreground/70 mb-2 block">开场动画</label>
-                <label className="flex items-center gap-3 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={skipIntro}
-                    onChange={(e) => setSkipIntro(e.target.checked)}
-                    className="w-4 h-4 rounded border-border accent-primary-600"
-                  />
-                  <span className="text-sm text-foreground/80">跳过开场动画</span>
-                </label>
-                <p className="text-[11px] text-foreground/40 mt-1 ml-7">开启后下次启动将直接进入主界面</p>
-              </div>
-              {/* 暗色模式 */}
-              <div>
-                <label className="text-xs font-medium text-foreground/70 mb-2 block">外观模式</label>
-                <div className="flex gap-2">
-                  {(["auto", "light", "dark"] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setDarkMode(mode)}
-                      className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${
-                        darkMode === mode
-                          ? "bg-primary-50 border-primary-400 text-primary-600"
-                          : "border-border text-foreground/60 hover:bg-muted"
-                      }`}
-                    >
-                      {mode === "auto" ? "跟随系统" : mode === "light" ? "浅色" : "深色"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {/* 主题色 */}
-              <div>
-                <label className="text-xs font-medium text-foreground/70 mb-2 block">主题色</label>
-                <div className="flex gap-3">
-                  {THEME_COLORS.map((t) => (
-                    <button
-                      key={t.key}
-                      type="button"
-                      onClick={() => setThemeColor(t.key)}
-                      className={`w-9 h-9 rounded-full border-2 transition-all ${
-                        themeColor === t.key ? "border-foreground scale-110 shadow-md" : "border-transparent hover:scale-105"
-                      }`}
-                      style={{ backgroundColor: t.color }}
-                      title={t.label}
-                    />
-                  ))}
-                </div>
-                <p className="text-[11px] text-foreground/40 mt-2">
-                  {THEME_COLORS.find((t) => t.key === themeColor)?.label ?? ""}
-                </p>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {profilePromptOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="profile-dialog-title"
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-4"
-        >
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              commitUserProfile();
-            }}
-            className="w-full max-w-md rounded-3xl border border-border bg-surface p-6 shadow-2xl"
-          >
-            <div className="mb-5 flex items-start gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary-600">
-                <Logo size={28} color="#FFFFFF" accent="#8FC0FF" />
-              </div>
-              <div>
-                <h2 id="profile-dialog-title" className="text-lg font-semibold text-foreground">
-                  先认识一下你
-                </h2>
-                <p className="mt-1 text-sm leading-5 text-foreground/55">
-                  填写年龄和专业后，我会为你调整问题推荐、讲解深度和校园建议。
-                </p>
-              </div>
-            </div>
-            <div className="space-y-3">
-              <label className="block">
-                <span className="mb-1.5 block text-xs font-medium text-foreground/70">年龄</span>
-                <input
-                  autoFocus
-                  type="number"
-                  min={10}
-                  max={100}
-                  inputMode="numeric"
-                  value={profileDraft.age}
-                  onChange={(event) =>
-                    setProfileDraft((current) => ({
-                      ...current,
-                      age: event.target.value,
-                    }))
-                  }
-                  placeholder="例如：20"
-                  className="w-full rounded-xl border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary-400"
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-xs font-medium text-foreground/70">专业</span>
-                <input
-                  type="text"
-                  maxLength={50}
-                  value={profileDraft.major}
-                  onChange={(event) =>
-                    setProfileDraft((current) => ({
-                      ...current,
-                      major: event.target.value,
-                    }))
-                  }
-                  placeholder="例如：计算机科学与技术"
-                  className="w-full rounded-xl border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary-400"
-                />
-              </label>
-            </div>
-            {profileError && (
-              <p className="mt-3 text-xs text-danger">{profileError}</p>
-            )}
-            <p className="mt-4 text-[11px] leading-4 text-foreground/40">
-              资料保存在当前浏览器，提问时用于定制回答，可随时在设置中修改。
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileError("");
-                  setProfilePromptOpen(false);
-                }}
-                className="rounded-lg px-4 py-2 text-sm text-foreground/60 hover:bg-muted"
-              >
-                稍后填写
-              </button>
-              <button
-                type="submit"
-                className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-500"
-              >
-                保存并开始
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ===== 文件预览组件 =====
-
-function FilePreview({
-  file,
-  fromUser,
-}: {
-  file: FileUIPart;
-  fromUser: boolean;
-}) {
-  if (isImage(file.mediaType) && file.url) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={file.url}
-        alt={file.filename ?? "图片"}
-        className="max-w-[200px] max-h-[200px] rounded-lg object-cover"
+      <SettingsDrawer
+        open={settingsOpen}
+        controlsDisabled={capabilityControlsDisabled}
+        capabilities={capabilities}
+        profileDraft={profileDraft}
+        profileError={profileError}
+        skipIntro={skipIntro}
+        darkMode={darkMode}
+        themeColor={themeColor}
+        onClose={() => setSettingsOpen(false)}
+        onCapabilitiesChange={setCapabilities}
+        onProfileDraftChange={setProfileDraft}
+        onSaveProfile={commitUserProfile}
+        onSkipIntroChange={setSkipIntro}
+        onDarkModeChange={setDarkMode}
+        onThemeColorChange={setThemeColor}
       />
-    );
-  }
-  return (
-    <a
-      href={file.url || "#"}
-      download={file.filename}
-      className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-xs ${
-        fromUser
-          ? "bg-white/20 text-white"
-          : "bg-muted text-foreground/80 hover:bg-border"
-      }`}
-    >
-      <span className="text-base">📄</span>
-      <span className="max-w-[160px] truncate">{file.filename}</span>
-      {file.url && (
-        <span className="opacity-70 text-[10px]">
-          {formatBytes(estimateDataUrlBytes(file.url))}
-        </span>
-      )}
-    </a>
-  );
-}
-
-function estimateDataUrlBytes(dataUrl: string) {
-  const comma = dataUrl.indexOf(",");
-  if (comma < 0) return 0;
-  const base64 = dataUrl.slice(comma + 1);
-  return Math.floor((base64.length * 3) / 4);
-}
-
-// ===== 导出文件卡片组件 =====
-
-const FORMAT_ICON: Record<ExportFileDescriptor["format"], string> = {
-  code: "💻",
-  markdown: "📝",
-  docx: "📘",
-  pdf: "📕",
-  text: "📄",
-};
-
-const FORMAT_LABEL: Record<ExportFileDescriptor["format"], string> = {
-  code: "代码",
-  markdown: "Markdown",
-  docx: "Word",
-  pdf: "PDF",
-  text: "文本",
-};
-
-function ExportFileCard({ file }: { file: ExportFileDescriptor }) {
-  const [downloading, setDownloading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleDownload = async () => {
-    setDownloading(true);
-    setError(null);
-    try {
-      await downloadExportFile(file);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "下载失败");
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  return (
-    <div className="flex items-center gap-2 bg-surface border border-border rounded-lg px-3 py-2 shadow-sm max-w-[280px]">
-      <span className="text-xl">{FORMAT_ICON[file.format]}</span>
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-foreground truncate" title={file.filename}>
-          {file.filename}
-        </div>
-        <div className="text-[10px] text-foreground/60">
-          {FORMAT_LABEL[file.format]}
-          {file.language ? ` · ${file.language}` : ""}
-        </div>
-        {error && <div className="text-[10px] text-danger mt-0.5">{error}</div>}
-      </div>
-      <button
-        type="button"
-        onClick={handleDownload}
-        disabled={downloading}
-        className="text-[11px] px-2 py-1 bg-primary-50 text-primary-600 hover:bg-primary-100 rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
-      >
-        {downloading ? "下载中…" : "下载"}
-      </button>
+      <UserProfilePrompt
+        open={profilePromptOpen}
+        draft={profileDraft}
+        error={profileError}
+        onDraftChange={setProfileDraft}
+        onSave={commitUserProfile}
+        onDismiss={() => {
+          setProfileError("");
+          setProfilePromptOpen(false);
+        }}
+      />
     </div>
   );
 }
