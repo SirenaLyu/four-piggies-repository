@@ -1,0 +1,9 @@
+{
+  "name": "wechat-import",
+  "private": true,
+  "type": "module",
+  "description": "微信公众号文章 → Dify 知识库 抓取与导入流水线（不依赖公众号后台权限）",
+  "dependencies": {
+    "cheerio": "^1.0.0"
+  }
+}

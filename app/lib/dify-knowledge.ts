@@ -20,6 +20,9 @@ const REQUEST_TIMEOUT_MS = 15_000;
 /** 最终送入大模型的知识库片段数量上限（控制上下文长度、降低首字与总延迟） */
 const MAX_CONTEXT_CHUNKS = 8;
 
+/** 单个片段送入大模型的最大字符数（科大代理 prefill 慢，过长片段截断以降低首 token 延迟） */
+const MAX_CHUNK_CHARS = 600;
+
 /** 检索结果缓存 TTL（毫秒）：同一问题短时间内直接复用结果，避免反复请求 Dify */
 const RETRIEVAL_CACHE_TTL_MS = 5 * 60 * 1000;
 const retrievalCache = new Map<
@@ -234,12 +237,16 @@ export async function retrieveKnowledgeContext(
     .sort((a, b) => b.score - a.score)
     .slice(0, MAX_CONTEXT_CHUNKS);
 
-  // 拼接为送入大模型的上下文：带序号与相似度标注，便于模型筛选引用
+  // 拼接为送入大模型的上下文：带序号与相似度标注，便于模型筛选引用；
+  // 单片段超长时截断，控制整体上下文规模
   const context = uniqueChunks
-    .map(
-      (chunk, index) =>
-        `【片段 ${index + 1}｜相似度 ${chunk.score.toFixed(3)}】\n${chunk.content}`,
-    )
+    .map((chunk, index) => {
+      const content =
+        chunk.content.length > MAX_CHUNK_CHARS
+          ? `${chunk.content.slice(0, MAX_CHUNK_CHARS)}…（片段过长已截断）`
+          : chunk.content;
+      return `【片段 ${index + 1}｜相似度 ${chunk.score.toFixed(3)}】\n${content}`;
+    })
     .join("\n\n---\n\n");
 
   const error =

@@ -169,11 +169,16 @@ const webSearchTool = tool({
   description:
     "实时联网搜索工具：通过搜索引擎检索互联网上的最新公开信息。" +
     "当知识库查不到答案、内容可能过时，或用户需要最新动态（新闻、通知、讲座、活动、政策变化等）时使用。" +
-    "优先聚焦与中国科学技术大学相关的内容，但也可以搜索一般性问题。",
+    "优先聚焦与中国科学技术大学相关的内容，但也可以搜索一般性问题。" +
+    "搜索词必须用完整校名“中国科学技术大学”（不要用“中科大”等缩写，缩写会搜不到），" +
+    "保持简短自然的核心关键词，不要堆砌同义词或多个关键词组合。",
   inputSchema: z.object({
     query: z
       .string()
-      .describe("要搜索的关键词，保留完整语义以获得更好的搜索结果"),
+      .describe(
+        "要搜索的关键词：简短自然（如“中国科学技术大学 放假安排”），" +
+        "校名用全称，不堆砌同义词，保留完整语义以获得更好的搜索结果",
+      ),
   }),
   execute: async ({ query }) => {
     const apiKey = process.env.DIFY_WORKFLOW_API_KEY;
@@ -201,7 +206,7 @@ const webSearchTool = tool({
           response_mode: "blocking",
           user: "campus-ai-assistant",
         }),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(20_000),
       });
 
       if (!response.ok) {
@@ -216,11 +221,20 @@ const webSearchTool = tool({
       const result = data?.data?.outputs?.result;
 
       if (typeof result === "string" && result.trim()) {
-        console.log(`[web_search] 结果长度: ${result.length} 字符`);
-        return result;
+        // 截断过长的搜索结果：科大代理 prefill 慢，控制上下文长度以降低首 token 延迟
+        const MAX_SEARCH_CHARS = 2400;
+        const trimmed =
+          result.length > MAX_SEARCH_CHARS
+            ? `${result.slice(0, MAX_SEARCH_CHARS)}…（搜索结果已截断）`
+            : result;
+        console.log(
+          `[web_search] 结果长度: ${result.length} 字符` +
+            (result.length > MAX_SEARCH_CHARS ? `（截断至 ${MAX_SEARCH_CHARS}）` : ""),
+        );
+        return trimmed;
       }
 
-      return "未找到相关新闻或通知。";
+      return "未找到相关新闻或通知。不要再换关键词重复搜索同一主题，请直接基于知识库结果或已有知识回答。";
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[web_search] 异常: ${message}`);
@@ -267,6 +281,8 @@ const SYSTEM_PROMPT = `你是中国科学技术大学智能校园助手，名字
 3. 拿到两个工具的结果后，**综合两者直接回答，不要再调用任何工具**。
 4. 如果某个工具返回"未找到"或"未配置"，忽略它、基于另一个工具的结果回答。
 5. **永远不要说你不能联网搜索**：web_search 就是你的联网能力，直接调用它即可。
+6. **web_search 无结果时不要反复换词重试**（最多重试一次）：继续搜大概率还是没有，
+   应立即基于知识库结果或已有知识回答，并告知用户未能搜到实时信息。
 
 ## 回答要求
 

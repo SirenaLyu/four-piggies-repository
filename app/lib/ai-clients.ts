@@ -19,12 +19,13 @@ export const EMBEDDING_MODEL = "BAAI/bge-m3";
 
 // 对话模型：可通过环境变量 CHAT_MODEL 随时切换
 // 学校代理可用模型实测：deepseek-v4-flash-ascend / qwen-chat / qwen3.6-chat 等
-// （同一模型在不同时段首 token 延迟波动极大，慢时可切换试试）
-export const CHAT_MODEL = process.env.CHAT_MODEL?.trim() || "deepseek-v4-flash-ascend";
+// （同一模型在不同时段首 token 延迟波动极大，慢时可切换试试；
+//   生成速度实测 qwen-chat ≈120字/s 远快于 deepseek ≈11~17字/s，长回答优先选 qwen-chat）
+export const CHAT_MODEL = process.env.CHAT_MODEL?.trim() || "qwen-chat";
 
-// 备用模型：主模型网络/超时失败时自动降级
+// 备用模型：主模型网络/超时失败时自动降级（deepseek 首 token 更快，适合兜底）
 export const CHAT_FALLBACK_MODEL =
-  process.env.CHAT_FALLBACK_MODEL?.trim() || "qwen-chat";
+  process.env.CHAT_FALLBACK_MODEL?.trim() || "deepseek-v4-flash-ascend";
 
 /** 判断是否为网络/超时类错误（这类错误换一个模型重试才有意义） */
 function isNetworkOrTimeoutError(error: unknown): boolean {
