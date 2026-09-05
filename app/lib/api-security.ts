@@ -10,7 +10,13 @@ export type RateLimitResult = {
 };
 
 export type ApiSecurityOptions = {
-  scope: "chat" | "export" | "summarize";
+  scope:
+    | "chat"
+    | "export"
+    | "summarize"
+    | "auth"
+    | "modelConfig"
+    | "agentDirectory";
   defaultLimit: number;
   windowMs?: number;
 };

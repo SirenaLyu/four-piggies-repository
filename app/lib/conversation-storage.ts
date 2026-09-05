@@ -9,6 +9,11 @@ export type ConversationSummary = {
 
 export const STORAGE_KEY = "campus-ai-conversations";
 
+function scopedStorageKey(scope: string): string {
+  const safeScope = scope.trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
+  return `${STORAGE_KEY}:${safeScope || "legacy"}`;
+}
+
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 function browserStorage(): StorageLike | null {
@@ -53,11 +58,12 @@ export function stripAttachmentPayloads(messages: UIMessage[]): UIMessage[] {
 }
 
 export function loadConversations(
+  scope = "legacy",
   storage: StorageLike | null = browserStorage(),
 ): ConversationSummary[] {
   if (!storage) return [];
   try {
-    const raw = storage.getItem(STORAGE_KEY);
+    const raw = storage.getItem(scopedStorageKey(scope));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as ConversationSummary[];
     return Array.isArray(parsed) ? parsed : [];
@@ -68,18 +74,20 @@ export function loadConversations(
 
 export function saveConversations(
   list: ConversationSummary[],
+  scope = "legacy",
   storage: StorageLike | null = browserStorage(),
 ): boolean {
-  return storage ? safeWrite(storage, STORAGE_KEY, list) : false;
+  return storage ? safeWrite(storage, scopedStorageKey(scope), list) : false;
 }
 
 export function loadConversationMessages(
   id: string,
+  scope = "legacy",
   storage: StorageLike | null = browserStorage(),
 ): UIMessage[] {
   if (!storage) return [];
   try {
-    const key = `${STORAGE_KEY}:${id}`;
+    const key = `${scopedStorageKey(scope)}:${id}`;
     const raw = storage.getItem(key);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
@@ -96,22 +104,25 @@ export function loadConversationMessages(
 export function saveConversationMessages(
   id: string,
   messages: UIMessage[],
+  scope = "legacy",
   storage: StorageLike | null = browserStorage(),
 ): boolean {
   return storage
-    ? safeWrite(storage, `${STORAGE_KEY}:${id}`, stripAttachmentPayloads(messages))
+    ? safeWrite(storage, `${scopedStorageKey(scope)}:${id}`, stripAttachmentPayloads(messages))
     : false;
 }
 
 export function deleteConversationStorage(
   id: string,
+  scope = "legacy",
   storage: StorageLike | null = browserStorage(),
 ): boolean {
   if (!storage) return false;
   try {
-    storage.removeItem(`${STORAGE_KEY}:${id}`);
+    storage.removeItem(`${scopedStorageKey(scope)}:${id}`);
     return saveConversations(
-      loadConversations(storage).filter((conversation) => conversation.id !== id),
+      loadConversations(scope, storage).filter((conversation) => conversation.id !== id),
+      scope,
       storage,
     );
   } catch (error) {

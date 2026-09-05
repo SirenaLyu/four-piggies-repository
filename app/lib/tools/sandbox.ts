@@ -11,6 +11,20 @@ function isInside(target: string, base: string): boolean {
   );
 }
 
+export function isSensitivePath(target: string): boolean {
+  const normalized = path.resolve(target).toLowerCase();
+  const basename = path.basename(normalized);
+  return (
+    basename === ".env" ||
+    basename.startsWith(".env.") ||
+    /\.(?:pem|key|pfx|p12)$/i.test(basename) ||
+    /^(?:id_rsa|id_ed25519|credentials|\.npmrc|\.pypirc|\.netrc|\.dockercfg)$/i.test(basename) ||
+    /^(?:secrets?|credentials?)(?:\.[^.]+)?$/i.test(basename) ||
+    /(?:^|[\\/])(?:\.git|\.ssh|\.aws|\.azure|\.kube|\.gnupg)(?:[\\/]|$)/i.test(normalized) ||
+    /(?:^|[\\/])data[\\/]auth(?:[\\/]|$)/i.test(normalized)
+  );
+}
+
 export function authorizePath(target: string, allowedDirs: string[]): PathCheck {
   if (!allowedDirs || allowedDirs.length === 0) {
     return { ok: false, reason: "没有授权目录" };
@@ -36,7 +50,7 @@ export function getConfiguredAllowedRoots(): string[] {
     .filter(Boolean);
   return configured.length > 0
     ? configured
-    : [path.resolve(/* turbopackIgnore: true */ process.cwd())];
+    : [];
 }
 
 async function realDirectory(target: string): Promise<string | null> {
@@ -76,6 +90,9 @@ export async function authorizeExistingPath(
   target: string,
   allowedDirs: string[],
 ): Promise<PathCheck> {
+  if (isSensitivePath(target)) {
+    return { ok: false, reason: "敏感配置、凭据或认证数据不允许通过 Agent 访问" };
+  }
   const lexical = authorizePath(target, allowedDirs);
   if (!lexical.ok) return lexical;
   try {
@@ -99,6 +116,9 @@ export async function resolveWritePath(
   const resolved = path.isAbsolute(target)
     ? path.resolve(target)
     : path.resolve(baseCheck.path, target);
+  if (isSensitivePath(resolved)) {
+    return { ok: false, reason: "敏感配置、凭据或认证数据不允许通过 Agent 写入" };
+  }
   const lexical = authorizePath(resolved, allowedDirs);
   if (!lexical.ok) return lexical;
   let ancestor = lexical.path;
@@ -117,6 +137,13 @@ export async function resolveWritePath(
   }
 }
 
-export const MAX_READ_BYTES = 512 * 1024;
+export const MAX_READ_BYTES = 128 * 1024;
+export const MAX_SOURCE_FILE_BYTES = 4 * 1024 * 1024;
+export const MAX_READ_LINES = 400;
+export const MAX_LIST_ENTRIES = 200;
+export const MAX_SEARCH_MATCHES = 80;
+export const MAX_SEARCH_FILES = 1_000;
+export const MAX_SEARCH_BYTES = 12 * 1024 * 1024;
+export const MAX_WRITE_BYTES = 1024 * 1024;
 export const COMMAND_TIMEOUT_MS = 60_000;
 export const MAX_OUTPUT_BYTES = 64 * 1024;

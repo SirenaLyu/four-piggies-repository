@@ -22,6 +22,7 @@
 /generated/
 /data/keda-jijian/
 /data/ustc-wechat/
+/data/auth/
 
 # misc
 .DS_Store

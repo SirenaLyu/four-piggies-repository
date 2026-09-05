@@ -8,12 +8,19 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --test --no-warnings",
-    "check": "npm test && npm run lint && npx tsc --noEmit && npm run eval:retrieval",
+    "check": "npm test && npm run lint && npx tsc --noEmit && npm run eval:retrieval && npm run eval:e2e",
     "test:smoke": "node --no-warnings scripts/smoke-production.mjs",
     "eval:retrieval": "node --no-warnings scripts/eval-retrieval.mjs",
     "eval:retrieval:live": "node --no-warnings scripts/eval-retrieval.mjs --live",
+    "eval:e2e": "node --no-warnings scripts/eval-campus-e2e.mjs --strict",
+    "eval:e2e:live": "node --no-warnings scripts/eval-campus-e2e.mjs --retrieval",
+    "eval:e2e:gate": "node --no-warnings scripts/eval-campus-e2e.mjs --retrieval --strict",
+    "eval:e2e:answer": "node --no-warnings scripts/eval-campus-e2e.mjs --answer --strict",
+    "eval:e2e:answer:local": "npm run build && node --no-warnings scripts/run-campus-e2e-answer.mjs",
     "sync:keda-jijian": "node scripts/sync-wechat-keda-jijian.mjs --account keda-jijian",
-    "sync:ustc-wechat": "node scripts/sync-wechat-keda-jijian.mjs --account ustc"
+    "sync:ustc-wechat": "node scripts/sync-wechat-keda-jijian.mjs --account ustc",
+    "sync:ustc-faculty": "node scripts/sync-ustc-faculty-dify.mjs",
+    "sync:ustc-library": "node scripts/sync-ustc-library-dify.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.23",
@@ -27,7 +34,6 @@
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "three": "^0.185.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -35,7 +41,6 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@types/three": "^0.185.4",
     "eslint": "^9",
     "eslint-config-next": "16.3.3",
     "tailwindcss": "^4",

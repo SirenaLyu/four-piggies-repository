@@ -45,6 +45,7 @@ type ConversationSidebarProps = {
   expandedConversations: Set<string>;
   agentEnabled: boolean;
   authorizedDirectories: string[];
+  storageScope: string;
   showAddDirectory: boolean;
   onNewConversation: () => void;
   onSelectConversation: (id: string) => void;
@@ -54,8 +55,8 @@ type ConversationSidebarProps = {
   onOpen: () => void;
   onClose: () => void;
   onToggleAddDirectory: () => void;
-  onAllowDirectory: (directory: string) => void;
-  onRemoveDirectory: (directory: string) => void;
+  onAllowDirectory: (directory: string) => void | Promise<void>;
+  onRemoveDirectory: (directory: string) => void | Promise<void>;
   onCancelAddDirectory: () => void;
 };
 
@@ -68,6 +69,7 @@ export function ConversationSidebar({
   expandedConversations,
   agentEnabled,
   authorizedDirectories,
+  storageScope,
   showAddDirectory,
   onNewConversation,
   onSelectConversation,
@@ -89,12 +91,12 @@ export function ConversationSidebar({
       if (conversation.id !== activeId) {
         index.set(
           conversation.id,
-          questionNodes(loadConversationMessages(conversation.id)),
+          questionNodes(loadConversationMessages(conversation.id, storageScope)),
         );
       }
     }
     return index;
-  }, [activeId, conversations, hydrated]);
+  }, [activeId, conversations, hydrated, storageScope]);
   const activeQuestionNodes = questionNodes(activeMessages);
 
   return (
@@ -236,7 +238,7 @@ export function ConversationSidebar({
                       </span>
                       <button
                         type="button"
-                        onClick={() => onRemoveDirectory(directory)}
+                        onClick={() => void onRemoveDirectory(directory)}
                         className="px-0.5 text-foreground/40 hover:text-danger"
                         aria-label={`移除授权目录 ${directory}`}
                       >

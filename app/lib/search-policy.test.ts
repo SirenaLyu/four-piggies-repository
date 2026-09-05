@@ -229,3 +229,16 @@ test("Agent 模式保留更多文件和知识库检索步骤", () => {
     [],
   );
 });
+
+test("Agent 单工具达到预算后只关闭该工具", () => {
+  const tools = ["read_file", "find_files", "query_knowledge_base"];
+  assert.deepEqual(
+    activeToolNamesForStep(
+      tools,
+      2,
+      { webSearches: 0, agentToolCalls: { read_file: 6, find_files: 1 } },
+      7,
+    ),
+    ["find_files", "query_knowledge_base"],
+  );
+});

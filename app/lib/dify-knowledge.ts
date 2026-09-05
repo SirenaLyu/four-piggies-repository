@@ -38,11 +38,112 @@ type DatasetRoute =
   | "shuttle"
   | "calendar"
   | "courses"
+  | "faculty"
   | "policies"
   | "info";
 
 const EXACT_COURSE_QUERY_PATTERN =
-  /(?:课堂号|课程号|课程代码)|\b(?:[A-Z]{2,}\d{3,}(?:\.\d+)?|\d{2,}[A-Z]\d{2,})\b/i;
+  /(?:课堂号|课程号|课程代码)|\b(?:[A-Z]{2,}\d{3,}(?:\.\d+)?|\d{4,}\.\d{1,3}|\d{2,}[A-Z]\d{2,})\b/i;
+
+const FACULTY_QUERY_PATTERN =
+  /教师|老师|教授|副教授|研究员|导师|博导|硕导|研究方向|研究领域|科研成果|论文|专利|获奖|课题组|实验室负责人/;
+
+export function extractFacultyNameQuery(query: string): string | undefined {
+  const withoutLeadIn = query
+    .replace(/中国科学技术大学|中国科大|中科大|科大/g, " ")
+    .replace(/请问|请查|帮我查|查一下|介绍一下|我想了解|想了解/g, " ")
+    .replace(
+      /[\p{Script=Han}]{2,18}(?:学院|学部|实验室|研究中心|研究院|系)/gu,
+      " ",
+    );
+  const matches = [
+    ...withoutLeadIn.matchAll(
+      /([\p{Script=Han}·]{2,4}?)\s*(?=(?:老师|教师|副教授|教授|研究员|导师|博导|硕导)|的?\s*(?:职称|研究方向|研究领域|科研成果|论文|专利|获奖|成果))/gu,
+    ),
+  ];
+  const candidate = matches[0]?.[1];
+  if (!candidate || /哪些|什么|研究|方向|成果|老师|教师|的|和|与|谁|哪|有/.test(candidate)) {
+    return undefined;
+  }
+  return candidate;
+}
+
+const COURSE_STRUCTURED_FIELD_PATTERN =
+  /学分|学时|时间|地点|教室|上课|评分|评价人数|选课人数|限选人数|考核/;
+
+function courseCodeBase(value: string): string {
+  const normalized = value.trim().toUpperCase();
+  if (normalized.includes(".")) return normalized.replace(/\.\d+$/, "");
+  return normalized.replace(/\d{2}$/, "");
+}
+
+function courseRequestedFieldPatterns(query: string): RegExp[] {
+  return [
+    /学分/.test(query) && /学分：/,
+    /学时/.test(query) && /学时：/,
+    /时间|上课/.test(query) && /时间地点：/,
+    /地点|教室|上课/.test(query) && /时间地点：/,
+    /评分|评价/.test(query) && /评课社区评分：/,
+    /人数/.test(query) && /(?:评价人数|选课人数|限选人数)：/,
+    /考核/.test(query) && /考核方式：/,
+  ].filter((pattern): pattern is RegExp => pattern instanceof RegExp);
+}
+
+function isCourseStructuredHit(
+  teacherName: string,
+  fieldPatterns: RegExp[],
+  chunk: KnowledgeChunk,
+): boolean {
+  return (
+    chunk.content.includes(`授课教师：${teacherName}`) &&
+    fieldPatterns.every((pattern) => pattern.test(chunk.content))
+  );
+}
+
+/**
+ * “某老师教什么课、多少学分”需要先从评课卡片识别课程代码，再查开课表。
+ * 返回的查询会作为同一课程库内的第二跳检索；没有明确姓名/结构化字段时不扩展。
+ */
+export function buildCourseFollowupQueries(
+  query: string,
+  chunks: KnowledgeChunk[],
+): string[] {
+  const teacherName = extractFacultyNameQuery(query);
+  if (!teacherName || !COURSE_STRUCTURED_FIELD_PATTERN.test(query)) return [];
+  const requestedFieldPatterns = courseRequestedFieldPatterns(query);
+  if (
+    chunks.some((chunk) =>
+      isCourseStructuredHit(teacherName, requestedFieldPatterns, chunk),
+    )
+  ) {
+    return [];
+  }
+
+  const requestedFields = [
+    /学分/.test(query) && "学分",
+    /学时/.test(query) && "学时",
+    /时间|上课/.test(query) && "时间",
+    /地点|教室|上课/.test(query) && "地点",
+    /评分|评价/.test(query) && "评分",
+    /人数/.test(query) && "人数",
+    /考核/.test(query) && "考核",
+  ].filter(Boolean);
+  const codes = new Set<string>();
+  for (const chunk of chunks) {
+    if (!chunk.content.includes(teacherName)) continue;
+    for (const match of chunk.content.matchAll(
+      /评课社区课程代码：([A-Z0-9._-]{5,})/gi,
+    )) {
+      const base = courseCodeBase(match[1]);
+      if (base.length >= 4) codes.add(base);
+      if (codes.size >= 4) break;
+    }
+    if (codes.size >= 4) break;
+  }
+  return [...codes].map(
+    (code) => `${code} ${teacherName} ${requestedFields.join(" ")}`.trim(),
+  );
+}
 
 const KNOWN_DATASET_ROUTES: Record<DatasetRoute, string[]> = {
   scholarships: ["058eb792-77df-4c98-8f40-1feabf5c10dc"],
@@ -52,19 +153,22 @@ const KNOWN_DATASET_ROUTES: Record<DatasetRoute, string[]> = {
   calendar: ["ab7400a3-b5c5-4f80-8d75-84be0cc4bb63"],
   info: ["975e7edb-4979-4cfe-95e2-9cc2f782488d"],
   courses: ["1e3922a5-c7a6-4307-a852-62921e2a843b"],
+  faculty: ["975e7edb-4979-4cfe-95e2-9cc2f782488d"],
   policies: ["ef053c5b-7d01-40e7-a2b6-cbce54ac261f"],
 };
 
 const DATASET_ROUTE_KEYWORDS: Record<DatasetRoute, RegExp> = {
   scholarships: /奖学金|助学金|奖助|资助|助学贷款|评优|评奖|困难生/,
-  library: /图书馆|借书|还书|续借|开馆|闭馆|馆藏|座位|数据库|文献/,
+  library: /图书馆|借书|借.{0,4}本书|借阅|还书|续借|开馆|闭馆|馆藏|座位|数据库|文献/,
   notices: /通知|公告|公示|讲座|活动|新闻|最新|教务处动态/,
   shuttle: /班车|校车|发车|乘车|车次|东区.*西区|西区.*东区|高新区/,
   calendar: /校历|开学|放假|寒假|暑假|考试周|学期|注册时间|报到时间/,
   courses:
-    /课程|选课|课表|学分|课程号|课堂号|课程代码|上课|教师|老师|\b(?:[A-Z]{2,}\d{3,}(?:\.\d+)?|\d{2,}[A-Z]\d{2,})\b/i,
+    /课程|选课|课表|学分|课程号|课堂号|课程代码|上课|授课|任课|教.{0,6}课|\b(?:[A-Z]{2,}\d{3,}(?:\.\d+)?|\d{4,}\.\d{1,3}|\d{2,}[A-Z]\d{2,})\b/i,
+  faculty:
+    /教师|老师|教授|副教授|研究员|导师|博导|硕导|研究方向|研究领域|科研成果|论文|专利|课题组|实验室负责人/,
   policies: /政策|规定|办法|制度|流程|申请|办理|手续|材料|指南|细则/,
-  info: /地址|电话|联系方式|联系人|办公地点|办公室|部门|机构|校区|食堂|餐厅|宿舍|校园卡|一卡通/,
+  info: /地址|电话|联系方式|联系人|办公地点|办公室|部门|机构|校区|食堂|餐厅|美食广场|宿舍|校园卡|一卡通/,
 };
 
 const PRIMARY_DATASET_ROUTES: DatasetRoute[] = [
@@ -73,6 +177,7 @@ const PRIMARY_DATASET_ROUTES: DatasetRoute[] = [
   "shuttle",
   "calendar",
   "courses",
+  "faculty",
 ];
 
 const DATASET_ROUTE_LABELS: Record<DatasetRoute, string> = {
@@ -82,6 +187,7 @@ const DATASET_ROUTE_LABELS: Record<DatasetRoute, string> = {
   shuttle: "班车",
   calendar: "校历",
   courses: "课程",
+  faculty: "教师信息",
   policies: "政策指南",
   info: "校园信息",
 };
@@ -182,8 +288,16 @@ export function routeDatasetIds(
 ): string[] {
   const allowed = new Set(datasetIds);
   const routes = effectiveDatasetRoutes(configuredValue);
-  const matchedRoutes = (Object.keys(DATASET_ROUTE_KEYWORDS) as DatasetRoute[])
+  let matchedRoutes = (Object.keys(DATASET_ROUTE_KEYWORDS) as DatasetRoute[])
     .filter((route) => DATASET_ROUTE_KEYWORDS[route].test(query));
+  // “授课教师/哪位老师上课”只需要课程库；同时询问研究、职称或成果时才并查教师库。
+  if (
+    matchedRoutes.includes("courses") &&
+    matchedRoutes.includes("faculty") &&
+    !/职称|导师资格|研究方向|研究领域|研究(?:什么|哪些|哪)|科研成果|论文|专利|获奖|课题组|实验室负责人/.test(query)
+  ) {
+    matchedRoutes = matchedRoutes.filter((route) => route !== "faculty");
+  }
 
   const idsForRoutes = (routeNames: DatasetRoute[]) =>
     Array.from(
@@ -291,12 +405,13 @@ export function filterChunksByDatasetThreshold(
     : chunks.filter((chunk) => chunk.score >= threshold);
 }
 
-/** 使用项目历史评测验证过的 semantic + reranker + top_k=5 默认参数。 */
+/** 默认使用 semantic；课程号和教师姓名/成果类精确查询使用 hybrid 扩大候选。 */
 export function buildRetrievalModel(
   env: NodeJS.ProcessEnv = process.env,
   query = "",
 ): Record<string, unknown> {
-  const isExactCourseQuery = EXACT_COURSE_QUERY_PATTERN.test(query);
+  const isExactLookupQuery =
+    EXACT_COURSE_QUERY_PATTERN.test(query) || FACULTY_QUERY_PATTERN.test(query);
   const rerankingEnabled = env.DIFY_RERANKING_ENABLED?.trim().toLowerCase() !== "false";
   const threshold = Number(env.DIFY_RETRIEVAL_SCORE_THRESHOLD);
   const thresholdEnabled =
@@ -304,14 +419,14 @@ export function buildRetrievalModel(
   const model: Record<string, unknown> = {
     search_method:
       env.DIFY_RETRIEVAL_SEARCH_METHOD?.trim() ||
-      (isExactCourseQuery
+      (isExactLookupQuery
         ? "hybrid_search"
         : "semantic_search"),
     reranking_enable: rerankingEnabled,
     top_k: Math.min(
       20,
       Math.floor(
-        numberFromEnv(env.DIFY_RETRIEVAL_TOP_K, isExactCourseQuery ? 10 : 5),
+        numberFromEnv(env.DIFY_RETRIEVAL_TOP_K, isExactLookupQuery ? 10 : 5),
       ),
     ),
     score_threshold_enabled: thresholdEnabled,
@@ -394,54 +509,104 @@ async function retrieveFromDataset(
     scope: "knowledge",
   },
 ): Promise<KnowledgeChunk[]> {
-  const body: Record<string, unknown> = {
-    query,
-    retrieval_model: buildRetrievalModel(process.env, query),
+  const exactFacultyName = KNOWN_DATASET_ROUTES.faculty.includes(datasetId)
+    ? extractFacultyNameQuery(query)
+    : undefined;
+  const retrieveOnce = async (effectiveQuery: string): Promise<KnowledgeChunk[]> => {
+    const body: Record<string, unknown> = {
+      query: effectiveQuery,
+      retrieval_model: buildRetrievalModel(process.env, effectiveQuery),
+    };
+
+    // 超时通过 AbortSignal 控制，避免请求挂死拖垮主进程
+    const startedAt = Date.now();
+    const response = await fetch(
+      `${baseUrl}/v1/datasets/${datasetId}/retrieve`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          // 注意：Bearer 使用的是 Dify 知识库的 API Key
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: withTimeoutSignal(requestSignal, REQUEST_TIMEOUT_MS),
+      },
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(
+        `HTTP ${response.status}${errorText ? `：${errorText.slice(0, 200)}` : ""}（耗时 ${Date.now() - startedAt}ms）`,
+      );
+    }
+
+    const data = await response.json();
+    const records = extractRecordsFromResponse(data);
+    logEvent(telemetry, "knowledge.dataset_completed", {
+      datasetId,
+      durationMs: Date.now() - startedAt,
+      recordCount: records.length,
+      rewrittenQuery: effectiveQuery !== query,
+      facultyNameQuery: Boolean(exactFacultyName),
+    });
+    const chunks = records
+      .map((record) => extractRecord(record, datasetId))
+      .filter((chunk): chunk is KnowledgeChunk => chunk !== null);
+    const filtered = filterChunksByDatasetThreshold(chunks, datasetId);
+    if (filtered.length !== chunks.length) {
+      logEvent(telemetry, "knowledge.dataset_filtered", {
+        datasetId,
+        filteredCount: chunks.length - filtered.length,
+      });
+    }
+    return filtered;
   };
 
-  // 超时通过 AbortSignal 控制，避免请求挂死拖垮主进程
-  const startedAt = Date.now();
-  const response = await fetch(
-    `${baseUrl}/v1/datasets/${datasetId}/retrieve`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        // 注意：Bearer 使用的是 Dify 知识库的 API Key
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: withTimeoutSignal(requestSignal, REQUEST_TIMEOUT_MS),
-    },
+  const primaryChunks = await retrieveOnce(exactFacultyName ?? query);
+  if (!KNOWN_DATASET_ROUTES.courses.includes(datasetId)) return primaryChunks;
+
+  const followupQueries = buildCourseFollowupQueries(query, primaryChunks);
+  if (followupQueries.length === 0) return primaryChunks;
+  const followups = await Promise.allSettled(followupQueries.map(retrieveOnce));
+  const teacherName = extractFacultyNameQuery(query);
+  const fieldPatterns = courseRequestedFieldPatterns(query);
+  const followupChunks = followups.flatMap((result) =>
+    result.status === "fulfilled" ? result.value : [],
   );
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(
-      `HTTP ${response.status}${errorText ? `：${errorText.slice(0, 200)}` : ""}（耗时 ${Date.now() - startedAt}ms）`,
-    );
+  // 同一课程库、不同第二跳查询的分数不可直接比较；先把同时包含教师和所求字段的
+  // 结构化开课记录前置，再保持各查询原有顺序。
+  const rankedFollowupChunks = teacherName
+    ? followupChunks
+        .map((chunk, index) => ({
+          chunk,
+          index,
+          structured: isCourseStructuredHit(teacherName, fieldPatterns, chunk),
+        }))
+        .sort(
+          (left, right) =>
+            Number(right.structured) - Number(left.structured) ||
+            left.index - right.index,
+        )
+        .map(({ chunk }) => chunk)
+    : followupChunks;
+  const merged: KnowledgeChunk[] = [];
+  const seen = new Set<string>();
+  for (const chunk of [
+    ...rankedFollowupChunks,
+    ...primaryChunks,
+  ]) {
+    if (seen.has(chunk.content)) continue;
+    seen.add(chunk.content);
+    merged.push(chunk);
   }
-
-  const data = await response.json();
-  const records = extractRecordsFromResponse(data);
-
-  logEvent(telemetry, "knowledge.dataset_completed", {
+  logEvent(telemetry, "knowledge.course_followup_completed", {
     datasetId,
-    durationMs: Date.now() - startedAt,
-    recordCount: records.length,
+    queryCount: followupQueries.length,
+    resultCount: merged.length,
+    failedCount: followups.filter((result) => result.status === "rejected").length,
   });
-
-  const chunks = records
-    .map((record) => extractRecord(record, datasetId))
-    .filter((chunk): chunk is KnowledgeChunk => chunk !== null);
-  const filtered = filterChunksByDatasetThreshold(chunks, datasetId);
-  if (filtered.length !== chunks.length) {
-    logEvent(telemetry, "knowledge.dataset_filtered", {
-      datasetId,
-      filteredCount: chunks.length - filtered.length,
-    });
-  }
-  return filtered;
+  return merged;
 }
 
 /**

@@ -1,0 +1,351 @@
+{
+  "version": 1,
+  "description": "科大精灵校园问答端到端评测：覆盖离线路由、真实 Dify 召回和可选的 /api/chat 最终回答。事实断言必须附来源。",
+  "qualityGates": {
+    "routingAccuracy": 1,
+    "retrievalAccuracy": 0.7,
+    "retrievalMeanHitAtK": 0.8,
+    "retrievalMrr": 0.55,
+    "retrievalP95LatencyMs": 15000,
+    "answerAccuracy": 0.7,
+    "answerP95LatencyMs": 120000,
+    "answerSourceDisclosureRate": 0.8
+  },
+  "cases": [
+    {
+      "id": "faculty-yu-title",
+      "category": "faculty",
+      "query": "中国科大俞书宏老师是什么职称？",
+      "expectedRoutes": ["faculty"],
+      "retrieval": {
+        "topK": 3,
+        "source": "https://faculty.ustc.edu.cn/yushuhong/zh_CN/index.htm",
+        "claims": [{ "id": "title", "all": ["俞书宏", "职称：教授"] }]
+      },
+      "answer": { "claims": [{ "all": ["俞书宏", "教授"] }] }
+    },
+    {
+      "id": "faculty-yu-research",
+      "category": "faculty",
+      "query": "俞书宏教授主要研究哪些方向？",
+      "expectedRoutes": ["faculty"],
+      "retrieval": {
+        "topK": 3,
+        "source": "https://faculty.ustc.edu.cn/yushuhong/zh_CN/index.htm",
+        "claims": [{ "id": "research", "all": ["俞书宏", "研究方向"], "any": ["纳米材料", "仿生", "自组装"] }]
+      },
+      "answer": { "claims": [{ "all": ["俞书宏"], "any": ["纳米材料", "仿生", "自组装"] }] }
+    },
+    {
+      "id": "faculty-yu-award",
+      "category": "faculty",
+      "query": "俞书宏教授获得过哪些重要奖项？",
+      "expectedRoutes": ["faculty"],
+      "retrieval": {
+        "topK": 5,
+        "source": "https://faculty.ustc.edu.cn/yushuhong/zh_CN/hjxx/245172/list/index.htm",
+        "claims": [{ "id": "award", "all": ["俞书宏", "2010年", "国家自然科学二等奖"] }]
+      },
+      "answer": { "claims": [{ "all": ["2010", "国家自然科学二等奖"] }] }
+    },
+    {
+      "id": "faculty-pan-research",
+      "category": "faculty",
+      "query": "潘建伟教授的研究领域是什么？",
+      "expectedRoutes": ["faculty"],
+      "retrieval": {
+        "topK": 3,
+        "source": "https://faculty.ustc.edu.cn/panjianwei/zh_CN/index.htm",
+        "claims": [{ "id": "research", "all": ["潘建伟", "量子通信", "量子计算"] }]
+      },
+      "answer": { "claims": [{ "all": ["潘建伟", "量子通信", "量子计算"] }] }
+    },
+    {
+      "id": "faculty-pan-patents",
+      "category": "faculty",
+      "query": "潘建伟教授的专利成果情况如何？",
+      "expectedRoutes": ["faculty"],
+      "retrieval": {
+        "topK": 5,
+        "source": "https://faculty.ustc.edu.cn/panjianwei/zh_CN/zlcg/154893/list/index.htm",
+        "claims": [{ "id": "patents", "all": ["潘建伟", "专利", "114 条"] }]
+      },
+      "answer": { "claims": [{ "all": ["潘建伟", "专利"], "any": ["114", "量子密钥分发", "量子处理器"] }] }
+    },
+    {
+      "id": "faculty-feng-title",
+      "category": "faculty",
+      "query": "网络空间安全学院冯福利老师的职称和研究方向",
+      "expectedRoutes": ["faculty"],
+      "retrieval": {
+        "topK": 3,
+        "source": "https://faculty.ustc.edu.cn/fengfuli/zh_CN/index.htm",
+        "claims": [
+          { "id": "identity", "all": ["冯福利", "网络空间安全学院", "特任教授"] },
+          { "id": "missing-research", "all": ["冯福利", "研究方向：教师主页未公开填写"] }
+        ]
+      },
+      "answer": { "claims": [{ "all": ["冯福利", "特任教授"], "any": ["未公开", "没有公开"] }] }
+    },
+    {
+      "id": "faculty-guo-research",
+      "category": "faculty",
+      "query": "郭光灿老师的职称和研究领域",
+      "expectedRoutes": ["faculty"],
+      "retrieval": {
+        "topK": 3,
+        "source": "https://faculty.ustc.edu.cn/guoguangcan/zh_CN/index.htm",
+        "claims": [{ "id": "profile", "all": ["郭光灿", "教授", "量子光学", "量子信息"] }]
+      },
+      "answer": { "claims": [{ "all": ["郭光灿", "教授"], "any": ["量子光学", "量子信息"] }] }
+    },
+    {
+      "id": "faculty-bao-research",
+      "category": "faculty",
+      "query": "包信和教授主要从事什么研究？",
+      "expectedRoutes": ["faculty"],
+      "retrieval": {
+        "topK": 3,
+        "source": "https://faculty.ustc.edu.cn/baoxinhe/zh_CN/index.htm",
+        "claims": [{ "id": "research", "all": ["包信和"], "any": ["表面化学", "金属催化材料", "多孔材料"] }]
+      },
+      "answer": { "claims": [{ "all": ["包信和"], "any": ["表面化学", "催化", "多孔材料"] }] }
+    },
+    {
+      "id": "faculty-wu-research",
+      "category": "faculty",
+      "query": "吴文彬教授研究什么方向？",
+      "expectedRoutes": ["faculty"],
+      "retrieval": {
+        "topK": 3,
+        "source": "https://faculty.ustc.edu.cn/wuwenbin/zh_CN/index.htm",
+        "claims": [{ "id": "research", "all": ["吴文彬"], "any": ["巨磁电阻", "铁电薄膜", "铁电场效应"] }]
+      }
+    },
+    {
+      "id": "faculty-discovery-quantum",
+      "category": "faculty",
+      "query": "科大有哪些研究量子通信的老师？",
+      "expectedRoutes": ["faculty"],
+      "retrieval": {
+        "topK": 10,
+        "source": "https://faculty.ustc.edu.cn/",
+        "claims": [{ "id": "candidate", "all": ["量子通信"], "any": ["潘建伟", "郭光灿"] }]
+      }
+    },
+    {
+      "id": "faculty-discovery-materials",
+      "category": "faculty",
+      "query": "哪些教授的研究方向包含纳米材料和自组装？",
+      "expectedRoutes": ["faculty"]
+    },
+    {
+      "id": "faculty-course-cross",
+      "category": "multi-domain",
+      "query": "刘党政老师教什么课，课程有多少学分？",
+      "expectedRoutes": ["courses"],
+      "retrieval": {
+        "topK": 10,
+        "source": "generated/wokepaike-knowledge/wokepaike_courses_2026_spring.md",
+        "claims": [{ "id": "course", "all": ["刘党政", "概率论", "学分：3"] }]
+      }
+    },
+
+    {
+      "id": "course-math3007",
+      "category": "courses",
+      "query": "2026春季 MATH3007.02 概率论 刘党政的时间地点和评课评分",
+      "expectedRoutes": ["courses"],
+      "retrieval": {
+        "topK": 5,
+        "source": "generated/wokepaike-knowledge/wokepaike_courses_2026_spring.md:37201",
+        "claims": [{ "id": "course", "all": ["MATH3007.02", "刘党政", "5401", "学分：3", "9.4/10"] }]
+      },
+      "answer": { "claims": [{ "all": ["MATH3007.02", "刘党政", "5401", "3", "9.4"] }] }
+    },
+    {
+      "id": "course-numerical-analysis",
+      "category": "courses",
+      "query": "2026春季001046.01数值分析是谁上课，几学分，评分多少？",
+      "expectedRoutes": ["courses"],
+      "retrieval": {
+        "topK": 5,
+        "source": "Dify published course snapshot 2026-09-03; https://icourse.club/course/25072/",
+        "claims": [{ "id": "course", "all": ["001046.01", "数值分析", "徐岩", "夏银华", "学分：3", "9.5/10"] }]
+      },
+      "answer": { "claims": [{ "all": ["数值分析", "徐岩", "夏银华", "3", "9.5"] }] }
+    },
+    {
+      "id": "course-wavelet",
+      "category": "courses",
+      "query": "小波分析001362.01的授课教师、时间地点和评分",
+      "expectedRoutes": ["courses"],
+      "retrieval": {
+        "topK": 5,
+        "source": "Dify published course snapshot 2026-09-03; https://icourse.club/course/2131/",
+        "claims": [{ "id": "course", "all": ["001362.01", "李新", "1201", "8.9/10"] }]
+      },
+      "answer": { "claims": [{ "all": ["小波分析", "李新", "1201", "8.9"] }] }
+    },
+    {
+      "id": "course-signal-system",
+      "category": "courses",
+      "query": "006502.03信号与系统B的老师、教室和学分",
+      "expectedRoutes": ["courses"],
+      "retrieval": {
+        "topK": 5,
+        "source": "generated/wokepaike-knowledge/wokepaike_courses_2026_spring.md:2691",
+        "claims": [{ "id": "course", "all": ["006502.03", "信号与系统B", "田超", "刘松德", "3A213", "学分：3"] }]
+      }
+    },
+    { "id": "course-natural-quantum", "category": "courses", "query": "量子力学课程由哪位老师上课，有多少学分", "expectedRoutes": ["courses"] },
+    { "id": "course-selection-time", "category": "courses", "query": "本科生什么时候选课，选课流程是什么？", "expectedRoutes": ["courses"] },
+    { "id": "course-credit-general", "category": "courses", "query": "计算机图形学有多少学分，谁授课？", "expectedRoutes": ["courses"] },
+    { "id": "course-rating", "category": "courses", "query": "数学建模课程的评课评分和授课老师", "expectedRoutes": ["courses"] },
+    { "id": "course-room", "category": "courses", "query": "2026春季数理方程A在哪个教室上课？", "expectedRoutes": ["courses"] },
+    { "id": "course-code-only", "category": "courses", "query": "帮我查一下001362.01", "expectedRoutes": ["courses"] },
+
+    {
+      "id": "info-east-canteens",
+      "category": "campus-info",
+      "query": "东区有哪些食堂？",
+      "expectedRoutes": ["info"],
+      "retrieval": {
+        "topK": 5,
+        "source": "校园信息知识库食堂餐厅记录",
+        "claims": [
+          { "id": "faculty-canteen", "all": ["东区教工餐厅", "东区活动中心3楼"] },
+          { "id": "east-garden", "all": ["东苑餐厅", "东校区"] }
+        ]
+      },
+      "answer": { "claims": [{ "all": ["东区教工餐厅", "东苑餐厅"] }] }
+    },
+    {
+      "id": "info-east-food-plaza",
+      "category": "campus-info",
+      "query": "东区美食广场在哪里，晚餐到几点？",
+      "expectedRoutes": ["info"],
+      "retrieval": {
+        "topK": 5,
+        "source": "校园信息知识库食堂餐厅记录",
+        "claims": [{ "id": "place", "all": ["美食广场", "东区活动中心2楼", "19:30"] }]
+      },
+      "answer": {
+        "claims": [
+          { "all": ["美食广场"], "any": ["东区活动中心2楼", "东区活动中心二楼"] },
+          { "any": ["19:30", "19点30分", "晚上七点半"] }
+        ]
+      }
+    },
+    { "id": "info-dormitory", "category": "campus-info", "query": "科大宿舍区分布和地址", "expectedRoutes": ["info"] },
+    { "id": "info-campus-card", "category": "campus-info", "query": "校园卡丢了去哪里补办，联系电话是多少？", "expectedRoutes": ["info"] },
+    { "id": "info-office", "category": "campus-info", "query": "教务处办公室地址和联系电话", "expectedRoutes": ["info"] },
+    { "id": "info-department-contact", "category": "campus-info", "query": "研究生院培养办公室的联系人和办公地点", "expectedRoutes": ["info"] },
+    { "id": "info-campus-location", "category": "campus-info", "query": "高新校区有哪些主要机构和食堂？", "expectedRoutes": ["info"] },
+
+    {
+      "id": "library-west-desk",
+      "category": "library",
+      "query": "西区图书馆一楼服务台开放时间和电话",
+      "expectedRoutes": ["library"],
+      "retrieval": {
+        "topK": 5,
+        "source": "https://lib.ustc.edu.cn/本馆概况/日常开放时间/",
+        "claims": [{ "id": "hours", "all": ["西区", "1楼", "服务台", "8:00-22:00", "63606474"] }]
+      },
+      "answer": { "claims": [{ "all": ["西区", "服务台", "8:00", "22:00", "63606474"] }] }
+    },
+    {
+      "id": "library-hours-and-renewal",
+      "category": "library",
+      "query": "图书馆开馆时间和图书续借规则",
+      "expectedRoutes": ["library"],
+      "retrieval": {
+        "topK": 10,
+        "source": "https://lib.ustc.edu.cn/",
+        "claims": [
+          { "id": "hours", "all": ["weekday_hours"] },
+          { "id": "renewal", "any": ["续借", "renew"] }
+        ]
+      }
+    },
+    { "id": "library-database", "category": "library", "query": "图书馆数据库怎么从校外访问？", "expectedRoutes": ["library"] },
+    { "id": "library-seat", "category": "library", "query": "图书馆座位怎么预约？", "expectedRoutes": ["library"] },
+    { "id": "library-borrow", "category": "library", "query": "本科生可以借多少本书，借期多久？", "expectedRoutes": ["library"] },
+
+    {
+      "id": "scholarship-xuedilong-contact",
+      "category": "scholarships",
+      "query": "雪迪龙科技创新奖学金公示的联系人和办公地点",
+      "expectedRoutes": ["scholarships"],
+      "retrieval": {
+        "topK": 5,
+        "source": "https://stuhome.ustc.edu.cn/2026/0604/c2298a743618/page.htm",
+        "claims": [{ "id": "contact", "all": ["雪迪龙", "陈晓雅", "0551-63602564", "东区老图书馆415"] }]
+      },
+      "answer": {
+        "claims": [
+          { "all": ["陈晓雅"], "any": ["0551-63602564", "0551 63602564", "63602564"] },
+          { "any": ["东区老图书馆415", "东区老图书馆 415", "东区老图书馆415室"] }
+        ]
+      }
+    },
+    {
+      "id": "scholarship-xuedilong-result",
+      "category": "scholarships",
+      "query": "2025年度雪迪龙科技创新奖学金候选人有多少名，公示到哪天？",
+      "expectedRoutes": ["scholarships"],
+      "retrieval": {
+        "topK": 5,
+        "source": "https://stuhome.ustc.edu.cn/2026/0604/c2298a743618/page.htm",
+        "claims": [{ "id": "result", "all": ["候选人18名", "6月9日18:00"] }]
+      },
+      "answer": { "claims": [{ "all": ["18", "6月9日", "18:00"] }] }
+    },
+    { "id": "scholarship-national", "category": "scholarships", "query": "研究生国家奖学金的申请条件和评审办法", "expectedRoutes": ["scholarships"] },
+    { "id": "scholarship-loan", "category": "scholarships", "query": "家庭经济困难学生如何申请助学贷款？", "expectedRoutes": ["scholarships"] },
+    { "id": "scholarship-evaluation", "category": "scholarships", "query": "本科生评奖评优和奖学金需要哪些材料？", "expectedRoutes": ["scholarships"] },
+
+    {
+      "id": "shuttle-august-east-hightech",
+      "category": "shuttle",
+      "query": "2026年8月工作日东区到高新园区有哪些班车？",
+      "expectedRoutes": ["shuttle"],
+      "retrieval": {
+        "topK": 10,
+        "source": "班车知识库 manual:用户提供 2026-08-15",
+        "claims": [
+          { "id": "noon", "all": ["东区", "高新园区", "12:30", "13:20"] },
+          { "id": "evening", "all": ["东区", "高新园区", "20:00", "20:50"] }
+        ]
+      },
+      "answer": { "claims": [{ "all": ["12:30", "20:00"], "any": ["2026-08-29", "8月29日", "有效期"] }] }
+    },
+    { "id": "shuttle-west-hightech", "category": "shuttle", "query": "西区到高新区的校车几点发车？", "expectedRoutes": ["shuttle"] },
+    { "id": "shuttle-hightech-east", "category": "shuttle", "query": "高新园区返回东区的班车时刻表", "expectedRoutes": ["shuttle"] },
+    { "id": "shuttle-weekend", "category": "shuttle", "query": "周末东区和西区之间有校车吗？", "expectedRoutes": ["shuttle"] },
+    { "id": "shuttle-procedure", "category": "shuttle", "query": "乘坐班车有哪些规定和手续？", "expectedRoutes": ["shuttle"] },
+
+    { "id": "calendar-exam", "category": "calendar", "query": "教学日历里的考试周和放假时间", "expectedRoutes": ["calendar"] },
+    { "id": "calendar-registration", "category": "calendar", "query": "校历上新学期注册和报到时间是什么时候？", "expectedRoutes": ["calendar"] },
+    { "id": "calendar-summer", "category": "calendar", "query": "暑假从什么时候开始，校历怎么安排？", "expectedRoutes": ["calendar"] },
+    { "id": "calendar-latest", "category": "calendar", "query": "最新教学日历里的开学和考试周日期", "expectedRoutes": ["calendar"] },
+
+    { "id": "policy-major-transfer", "category": "policies", "query": "转专业申请流程、条件和材料", "expectedRoutes": ["policies"] },
+    { "id": "policy-student-status", "category": "policies", "query": "本科生学籍管理规定有哪些？", "expectedRoutes": ["policies"] },
+    { "id": "policy-leave", "category": "policies", "query": "学生休学和复学怎么办理？", "expectedRoutes": ["policies"] },
+    { "id": "policy-retake", "category": "policies", "query": "课程重修和补考的规定是什么？", "expectedRoutes": ["courses"] },
+    { "id": "policy-graduation", "category": "policies", "query": "本科毕业资格审核需要满足哪些规定？", "expectedRoutes": ["policies"] },
+
+    { "id": "notice-recent-lectures", "category": "notices", "query": "最近学校有哪些讲座和活动通知？", "expectedRoutes": ["notices"] },
+    { "id": "notice-latest-news", "category": "notices", "query": "中国科大最新新闻和公告", "expectedRoutes": ["notices"] },
+    { "id": "notice-publicity", "category": "notices", "query": "学校本周有哪些评选公示？", "expectedRoutes": ["notices"] },
+    { "id": "notice-teaching", "category": "notices", "query": "教务处近期发布了哪些通知？", "expectedRoutes": ["notices"] },
+
+    { "id": "multi-library-shuttle", "category": "multi-domain", "query": "图书馆闭馆后还有去高新区的班车吗？", "expectedRoutes": ["library", "shuttle"] },
+    { "id": "multi-course-faculty", "category": "multi-domain", "query": "量子力学由哪位教授授课，这位老师研究什么？", "expectedRoutes": ["courses", "faculty"] },
+    { "id": "multi-scholarship-calendar", "category": "multi-domain", "query": "奖学金申请截止时间是否和校历考试周冲突？", "expectedRoutes": ["scholarships", "calendar"] },
+    { "id": "multi-policy-info", "category": "multi-domain", "query": "教务处的政策规定和办公室地址", "expectedRoutes": ["info", "policies"] },
+    { "id": "fallback-ambiguous", "category": "fallback", "query": "学校这件事怎么办", "expectedRoutes": ["info", "policies", "notices"] }
+  ]
+}

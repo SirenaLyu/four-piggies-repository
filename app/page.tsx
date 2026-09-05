@@ -19,6 +19,7 @@ import {
   type UserProfileDraft,
 } from "./components/SettingsDrawer";
 import { UserProfilePrompt } from "./components/UserProfilePrompt";
+import { AuthGate, type SignedInUser } from "./components/AuthGate";
 import {
   hasPendingApprovals,
   stripPendingApprovals,
@@ -78,30 +79,36 @@ function loadPreference(key: string, fallback: string): string {
   }
 }
 
-function loadCapabilities(): AssistantCapabilities {
+function userScopedKey(key: string, userId: string): string {
+  return `${key}:${userId}`;
+}
+
+function loadCapabilities(userId: string): AssistantCapabilities {
   if (typeof window === "undefined") return { ...DEFAULT_CAPABILITIES };
   try {
     return normalizeCapabilities(
-      JSON.parse(window.localStorage.getItem(CAPABILITIES_KEY) ?? "null"),
+      JSON.parse(
+        window.localStorage.getItem(userScopedKey(CAPABILITIES_KEY, userId)) ?? "null",
+      ),
     );
   } catch {
     return { ...DEFAULT_CAPABILITIES };
   }
 }
 
-function loadUserProfile(): UserProfile {
+function loadUserProfile(userId: string): UserProfile {
   if (typeof window === "undefined") return { ...EMPTY_USER_PROFILE };
   try {
     return normalizeUserProfile(
-      JSON.parse(loadPreference(USER_PROFILE_KEY, "null")),
+      JSON.parse(loadPreference(userScopedKey(USER_PROFILE_KEY, userId), "null")),
     );
   } catch {
     return { ...EMPTY_USER_PROFILE };
   }
 }
 
-function saveUserProfile(profile: UserProfile): void {
-  savePreference(USER_PROFILE_KEY, JSON.stringify(profile));
+function saveUserProfile(profile: UserProfile, userId: string): void {
+  savePreference(userScopedKey(USER_PROFILE_KEY, userId), JSON.stringify(profile));
 }
 
 function makeId() {
@@ -161,6 +168,10 @@ async function fileToDataUrl(file: File): Promise<FileUIPart> {
 // ===== 主组件 =====
 
 export default function Home() {
+  return <AuthGate>{(user) => <CampusAssistant user={user} />}</AuthGate>;
+}
+
+function CampusAssistant({ user }: { user: SignedInUser }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [showLanding, setShowLanding] = useState(true);
   const handleEnter = useCallback(() => setShowLanding(false), []);
@@ -218,9 +229,9 @@ export default function Home() {
   // 初始化时从 localStorage 读取会话列表
   useEffect(() => {
     // 从外部存储（localStorage）同步会话列表到 React 状态
-    setConversations(loadConversations());
+    setConversations(loadConversations(user.id));
     setHydrated(true);
-  }, []);
+  }, [user.id]);
 
   // 读取设置偏好
   useEffect(() => {
@@ -237,16 +248,27 @@ export default function Home() {
     setDarkMode(d);
     const c = loadPreference("campus-theme-color", "blue");
     setThemeColor(c);
-    setCapabilities(loadCapabilities());
-    setAuthorizedDirs(loadAuthorizedDirs());
-    const storedProfile = loadUserProfile();
+    setCapabilities(loadCapabilities(user.id));
+    let cancelled = false;
+    void loadAuthorizedDirs()
+      .then((directories) => {
+        if (!cancelled) setAuthorizedDirs(directories);
+      })
+      .catch((error) => {
+        console.warn("[agent-directories] 无法读取服务端授权：", error);
+        if (!cancelled) setAuthorizedDirs([]);
+      });
+    const storedProfile = loadUserProfile(user.id);
     setUserProfile(storedProfile);
     setProfileDraft({
       age: storedProfile.age?.toString() ?? "",
       major: storedProfile.major,
     });
     setProfilePromptOpen(!isCompleteUserProfile(storedProfile));
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [user.id]);
 
   // 持久化设置
   useEffect(() => {
@@ -262,8 +284,8 @@ export default function Home() {
     document.documentElement.setAttribute("data-theme-color", themeColor);
   }, [themeColor]);
   useEffect(() => {
-    savePreference(CAPABILITIES_KEY, JSON.stringify(capabilities));
-  }, [capabilities]);
+    savePreference(userScopedKey(CAPABILITIES_KEY, user.id), JSON.stringify(capabilities));
+  }, [capabilities, user.id]);
 
   // 同步 ref，避免 onFinish 闭包陈旧
   useEffect(() => {
@@ -274,8 +296,8 @@ export default function Home() {
   }, [activeId]);
 
   const initialMessages = useMemo<UIMessage[]>(
-    () => (hydrated ? loadConversationMessages(activeId) : []),
-    [activeId, hydrated],
+    () => (hydrated ? loadConversationMessages(activeId, user.id) : []),
+    [activeId, hydrated, user.id],
   );
 
   // ===== AI 标题总结 =====
@@ -301,13 +323,13 @@ export default function Home() {
         const next = prev.map((c) =>
           c.id === convoId ? { ...c, title: newTitle, updatedAt: Date.now() } : c,
         );
-        saveConversations(next);
+        saveConversations(next, user.id);
         return next;
       });
     } catch {
       // 静默失败，保留占位符标题
     }
-  }, []);
+  }, [user.id]);
 
   // ===== 导出文件生成 =====
   const generateExportsForMessage = useCallback(
@@ -371,11 +393,10 @@ export default function Home() {
             messages: stripPendingApprovals(nextMessages),
             capabilities,
             userProfile,
-            authorizedDirectories: capabilities.agent ? authorizedDirs : [],
           },
         }),
       }),
-    [authorizedDirs, capabilities, userProfile],
+    [capabilities, userProfile],
   );
 
   const { messages, sendMessage, status, addToolApprovalResponse } = useChat<UIMessage>({
@@ -389,7 +410,7 @@ export default function Home() {
       // 下方持久化 effect 的指纹不会变化，导致最终回复内容无法写入 localStorage
       const convoId = sentConvoIdRef.current ?? activeIdRef.current;
       if (finalMessages.length > 0) {
-        saveConversationMessages(convoId, finalMessages);
+        saveConversationMessages(convoId, finalMessages, user.id);
       }
       if (isAbort || isError) return;
       // 标题总结：仅当当前标题仍是占位符时触发
@@ -422,7 +443,7 @@ export default function Home() {
   useEffect(() => {
     if (!hydrated) return;
     if (messages.length === 0) return;
-    saveConversationMessages(activeId, messages);
+    saveConversationMessages(activeId, messages, user.id);
 
     const prev = conversationsRef.current;
     const existing = prev.find((c) => c.id === activeId);
@@ -458,11 +479,11 @@ export default function Home() {
         ...prev,
       ];
     }
-    saveConversations(merged);
+    saveConversations(merged, user.id);
     setConversations(merged);
     // 故意不依赖 conversations；用 ref 读取最新值，指纹变化才重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messagesFingerprint, activeId, hydrated]);
+  }, [messagesFingerprint, activeId, hydrated, user.id]);
 
   // ===== 事件处理 =====
 
@@ -479,7 +500,7 @@ export default function Home() {
   };
 
   const removeConversation = (id: string) => {
-    deleteConversationStorage(id);
+    deleteConversationStorage(id, user.id);
     setConversations((prev) => prev.filter((c) => c.id !== id));
     if (id === activeId) {
       startNewConversation();
@@ -597,7 +618,7 @@ export default function Home() {
     }
     setUserProfile(normalized);
     setProfileDraft({ age: String(normalized.age), major: normalized.major });
-    saveUserProfile(normalized);
+    saveUserProfile(normalized, user.id);
     setProfileError("");
     setProfilePromptOpen(false);
     return true;
@@ -620,6 +641,7 @@ export default function Home() {
         expandedConversations={expandedConvos}
         agentEnabled={capabilities.agent}
         authorizedDirectories={authorizedDirs}
+        storageScope={user.id}
         showAddDirectory={showAddDirectory}
         onNewConversation={startNewConversation}
         onSelectConversation={selectConversation}
@@ -631,13 +653,13 @@ export default function Home() {
         onToggleAddDirectory={() =>
           setShowAddDirectory((visible) => !visible)
         }
-        onAllowDirectory={(directory) => {
-          setAuthorizedDirs(addAuthorizedDirectory(directory));
+        onAllowDirectory={async (directory) => {
+          setAuthorizedDirs(await addAuthorizedDirectory(directory));
           setShowAddDirectory(false);
         }}
-        onRemoveDirectory={(directory) =>
-          setAuthorizedDirs(removeAuthorizedDirectory(directory))
-        }
+        onRemoveDirectory={async (directory) => {
+          setAuthorizedDirs(await removeAuthorizedDirectory(directory));
+        }}
         onCancelAddDirectory={() => setShowAddDirectory(false)}
       />
 
@@ -721,6 +743,7 @@ export default function Home() {
 
       <SettingsDrawer
         open={settingsOpen}
+        user={user}
         controlsDisabled={capabilityControlsDisabled}
         capabilities={capabilities}
         profileDraft={profileDraft}

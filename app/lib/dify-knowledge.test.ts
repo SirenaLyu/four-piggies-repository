@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildCourseFollowupQueries,
   buildRetrievalModel,
   buildKnowledgeCacheKey,
   extractRecord,
   extractRecordsFromResponse,
+  extractFacultyNameQuery,
   filterChunksByDatasetThreshold,
   parseDatasetScoreThresholds,
   routeDatasetIds,
@@ -80,6 +82,65 @@ test("包含精确课程号的查询使用混合检索", () => {
   assert.equal(model.search_method, "hybrid_search");
   assert.equal(model.reranking_enable, true);
   assert.equal(model.top_k, 10);
+  assert.equal(
+    buildRetrievalModel({} as NodeJS.ProcessEnv, "查询 001362.01 的课程信息")
+      .search_method,
+    "hybrid_search",
+  );
+});
+
+test("教师姓名与成果查询使用混合检索并扩大候选", () => {
+  const model = buildRetrievalModel(
+    {} as NodeJS.ProcessEnv,
+    "俞书宏教授的获奖和论文成果",
+  );
+  assert.equal(model.search_method, "hybrid_search");
+  assert.equal(model.top_k, 10);
+});
+
+test("教师精确问法提取姓名，泛化找人问题保留原查询", () => {
+  assert.equal(
+    extractFacultyNameQuery("网络空间安全学院冯福利老师的职称和研究方向"),
+    "冯福利",
+  );
+  assert.equal(extractFacultyNameQuery("潘建伟的论文成果"), "潘建伟");
+  assert.equal(extractFacultyNameQuery("有哪些研究量子通信的老师"), undefined);
+});
+
+test("教师课程复合问法从评课卡片生成课程代码第二跳查询", () => {
+  const chunks: KnowledgeChunk[] = [
+    {
+      datasetId: "courses",
+      score: 0.9,
+      content:
+        "评课社区课程：概率论 — 刘党政\n授课教师：刘党政\n评课社区课程代码：MATH300702\n评课社区评分：9.4/10",
+    },
+    {
+      datasetId: "courses",
+      score: 0.8,
+      content:
+        "评课社区课程：概率论进阶 — 刘党政\n授课教师：刘党政\n评课社区课程代码：MATH301301",
+    },
+  ];
+  assert.deepEqual(
+    buildCourseFollowupQueries("刘党政老师教什么课，课程有多少学分？", chunks),
+    ["MATH3007 刘党政 学分", "MATH3013 刘党政 学分"],
+  );
+  assert.deepEqual(buildCourseFollowupQueries("刘党政老师教什么课？", chunks), []);
+});
+
+test("已经召回教师对应结构化课程时不做第二跳", () => {
+  const chunks: KnowledgeChunk[] = [
+    {
+      datasetId: "courses",
+      score: 0.9,
+      content: "课堂号：MATH3007.02\n授课教师：刘党政\n学分：3",
+    },
+  ];
+  assert.deepEqual(
+    buildCourseFollowupQueries("刘党政老师教什么课，课程有多少学分？", chunks),
+    [],
+  );
 });
 
 test("环境变量可以显式覆盖按查询选择的检索方式", () => {
@@ -135,6 +196,68 @@ test("课程号本身可以触发课程知识库路由", () => {
     ),
     ["courses"],
   );
+});
+
+test("教师研究走教师库，单纯询问授课信息只走课程库", () => {
+  const routeMap = JSON.stringify({
+    faculty: ["faculty"],
+    courses: ["courses"],
+    info: ["faculty"],
+    policies: ["policies"],
+    notices: ["notices"],
+  });
+  assert.deepEqual(
+    routeDatasetIds(
+      "刘斌老师的研究方向和论文成果",
+      ["faculty", "courses", "policies", "notices"],
+      routeMap,
+    ),
+    ["faculty"],
+  );
+  assert.deepEqual(
+    routeDatasetIds(
+      "刘斌老师教什么课",
+      ["faculty", "courses", "policies", "notices"],
+      routeMap,
+    ),
+    ["courses"],
+  );
+  assert.deepEqual(
+    routeDatasetIds(
+      "刘斌老师教什么课，他的研究方向是什么",
+      ["faculty", "courses", "policies", "notices"],
+      routeMap,
+    ),
+    ["courses", "faculty"],
+  );
+  assert.deepEqual(
+    routeDatasetIds(
+      "量子力学由哪位教授授课，这位老师研究什么",
+      ["faculty", "courses", "policies", "notices"],
+      routeMap,
+    ),
+    ["courses", "faculty"],
+  );
+});
+
+test("识别纯数字课堂号和校园自然表达", () => {
+  const routeMap = JSON.stringify({
+    courses: ["courses"],
+    library: ["library"],
+    info: ["info"],
+    policies: ["policies"],
+    notices: ["notices"],
+  });
+  const datasetIds = ["courses", "library", "info", "policies", "notices"];
+  assert.deepEqual(routeDatasetIds("帮我查一下001362.01", datasetIds, routeMap), [
+    "courses",
+  ]);
+  assert.deepEqual(routeDatasetIds("东区美食广场在哪里", datasetIds, routeMap), [
+    "info",
+  ]);
+  assert.deepEqual(routeDatasetIds("本科生可以借多少本书", datasetIds, routeMap), [
+    "library",
+  ]);
 });
 
 test("未命中主题时只回退到信息、政策与通知库", () => {

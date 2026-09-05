@@ -3,9 +3,19 @@ const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 export const MAX_WEB_SEARCH_CALLS = 2;
 export const FINAL_ANSWER_STEP = 3;
 export const AGENT_FINAL_ANSWER_STEP = 6;
+export const AGENT_TOOL_CALL_LIMITS: Record<string, number> = {
+  list_dir: 3,
+  find_files: 3,
+  search_text: 3,
+  read_file: 6,
+  write_file: 1,
+  apply_patch: 3,
+  execute_command: 2,
+};
 
 export interface RetrievalUsage {
   webSearches: number;
+  agentToolCalls?: Record<string, number>;
 }
 
 export function finalAnswerStepForCapabilities(agentEnabled: boolean): number {
@@ -504,6 +514,10 @@ export function activeToolNamesForStep(
   return toolNames.filter((toolName) => {
     if (toolName === "web_search") {
       return usage.webSearches < MAX_WEB_SEARCH_CALLS;
+    }
+    const limit = AGENT_TOOL_CALL_LIMITS[toolName];
+    if (limit != null) {
+      return (usage.agentToolCalls?.[toolName] ?? 0) < limit;
     }
     return true;
   });

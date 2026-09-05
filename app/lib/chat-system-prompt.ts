@@ -14,6 +14,7 @@ export function buildSystemPrompt(
   capabilities: AssistantCapabilities,
   userProfile: UserProfile = EMPTY_USER_PROFILE,
   prefetchedKnowledge: KnowledgeRetrievalResult | null = null,
+  agentHasAuthorizedDirectories = true,
 ): string {
   const enabled: string[] = [];
   if (capabilities.knowledgeBase) {
@@ -26,6 +27,7 @@ export function buildSystemPrompt(
   if (prefetchedKnowledge) {
     toolRules.push(
       "- 已在模型调用前完成知识库检索。请直接依据下方资料回答，本轮无需再次调用知识库或联网工具。",
+      "- 最终答案必须明确写明信息来自知识库；资料包含官方页面时一并给出或说明可据此复核。",
     );
   } else if (capabilities.knowledgeBase) {
     toolRules.push(
@@ -87,8 +89,11 @@ ${toolRules.join("\n")}
 
 ## 回答要求
 - 使用中文，语气友好，格式清晰。
+- 回答前先在内部逐项核对用户问题中的实体、时间范围和所求字段；问题包含多个字段时，最终答案必须逐项覆盖。资料未提供某一字段时要明确写“资料未提供”，不能静默遗漏。
 - 使用工具时说明信息来自知识库、联网结果或本地文件。
 - 对可能过时且无法核验的信息清楚标注不确定性。${
-    capabilities.agent ? buildAgentPromptSections() : ""
+    capabilities.agent
+      ? buildAgentPromptSections(agentHasAuthorizedDirectories)
+      : ""
   }`;
 }

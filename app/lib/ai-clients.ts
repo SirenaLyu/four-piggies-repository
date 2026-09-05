@@ -1,30 +1,20 @@
+import "server-only";
+
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { createOpenAI } from "@ai-sdk/openai";
 import { wrapLanguageModel } from "ai";
-
-// chatClient: OpenAI 兼容对话 API，用于最终回答问题、生成标题、生成导出文件
-export const chatClient = createOpenAI({
-  baseURL: process.env.OPENAI_BASE_URL,
-  apiKey: process.env.OPENAI_API_KEY,
-  name: "campus-chat",
-});
-
-// embeddingClient: 硅基流动 API，用于把用户提问转为向量
-export const embeddingClient = createOpenAI({
-  baseURL: process.env.EMBEDDING_BASE_URL!,
-  apiKey: process.env.EMBEDDING_API_KEY!,
-  name: "siliconflow-embed",
-});
+import type { ResolvedModelConfig } from "./auth-store";
 
 export const EMBEDDING_MODEL = "BAAI/bge-m3";
 
-// 对话模型：默认使用 DeepSeek API，也可通过 CHAT_MODEL 随时切换。
-export const CHAT_MODEL = process.env.CHAT_MODEL?.trim() || "deepseek-v4-flash";
+// embeddingClient 仅供服务端脚本/后续向量功能使用。
+export const embeddingClient = createOpenAI({
+  baseURL: process.env.EMBEDDING_BASE_URL,
+  apiKey: process.env.EMBEDDING_API_KEY,
+  name: "siliconflow-embed",
+});
 
-// 备用模型：未显式配置时与主模型一致，即不做跨模型降级。
-export const CHAT_FALLBACK_MODEL =
-  process.env.CHAT_FALLBACK_MODEL?.trim() || CHAT_MODEL;
-
-/** 判断是否为网络/超时类错误（这类错误换一个模型重试才有意义） */
 function isNetworkOrTimeoutError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const msg = `${error.name} ${error.message}`.toLowerCase();
@@ -33,49 +23,138 @@ function isNetworkOrTimeoutError(error: unknown): boolean {
   );
 }
 
-/**
- * 带降级能力的对话模型：
- * 主模型网络/超时失败时，仅在配置了不同备用模型的情况下自动降级。
- */
-export const chatModel = wrapLanguageModel({
-  model: chatClient.chat(CHAT_MODEL),
-  modelId: CHAT_MODEL,
-  middleware: {
-    wrapStream: async ({ doStream, params }) => {
-      try {
-        return await doStream();
-      } catch (error) {
-        if (
-          CHAT_FALLBACK_MODEL !== CHAT_MODEL &&
-          isNetworkOrTimeoutError(error)
-        ) {
-          console.warn(
-            `[model] 主模型调用失败，降级到 ${CHAT_FALLBACK_MODEL}：${
-              (error as Error).message
-            }`,
-          );
-          return await chatClient.chat(CHAT_FALLBACK_MODEL).doStream(params);
+function configuredAllowedOrigins(): Set<string> {
+  return new Set(
+    (process.env.MODEL_BASE_URL_ALLOWLIST ?? "")
+      .split(",")
+      .map((value) => {
+        try {
+          return new URL(value.trim()).origin.toLowerCase();
+        } catch {
+          return "";
         }
-        throw error;
-      }
-    },
-    wrapGenerate: async ({ doGenerate, params }) => {
-      try {
-        return await doGenerate();
-      } catch (error) {
-        if (
-          CHAT_FALLBACK_MODEL !== CHAT_MODEL &&
-          isNetworkOrTimeoutError(error)
-        ) {
-          console.warn(
-            `[model] 主模型调用失败，降级到 ${CHAT_FALLBACK_MODEL}：${
-              (error as Error).message
-            }`,
-          );
-          return await chatClient.chat(CHAT_FALLBACK_MODEL).doGenerate(params);
+      })
+      .filter(Boolean),
+  );
+}
+
+function isPrivateIpv4(address: string): boolean {
+  const parts = address.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) return true;
+  const [a, b] = parts;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224
+  );
+}
+
+function isPrivateAddress(address: string): boolean {
+  const normalized = address.toLowerCase().replace(/^\[|\]$/g, "");
+  if (isIP(normalized) === 4) return isPrivateIpv4(normalized);
+  if (isIP(normalized) === 6) {
+    if (normalized.startsWith("::ffff:")) {
+      return isPrivateIpv4(normalized.slice("::ffff:".length));
+    }
+    return (
+      normalized === "::" ||
+      normalized === "::1" ||
+      normalized.startsWith("fc") ||
+      normalized.startsWith("fd") ||
+      /^fe[89ab]/.test(normalized)
+    );
+  }
+  return false;
+}
+
+/** 用户可配置公开 HTTPS OpenAI 兼容端点；内网端点须由管理员加入白名单。 */
+export function normalizeUserModelBaseUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error("API URL 不是合法网址");
+  }
+  if (url.username || url.password) throw new Error("API URL 不能包含用户名或密码");
+  const allowed = configuredAllowedOrigins().has(url.origin.toLowerCase());
+  if (!allowed && url.protocol !== "https:") {
+    throw new Error("API URL 必须使用 HTTPS；内网地址需由管理员加入白名单");
+  }
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (
+    !allowed &&
+    (hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname.endsWith(".local") ||
+      isPrivateAddress(hostname))
+  ) {
+    throw new Error("API URL 不能指向本机、内网或链路本地地址");
+  }
+  url.hash = "";
+  return url.toString().replace(/\/+$/, "");
+}
+
+async function assertSafeModelRequest(value: string): Promise<void> {
+  const url = new URL(value);
+  if (configuredAllowedOrigins().has(url.origin.toLowerCase())) return;
+  normalizeUserModelBaseUrl(url.origin);
+  const addresses = await lookup(url.hostname, { all: true, verbatim: true });
+  if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
+    throw new Error("模型 API 域名解析到了不安全的网络地址");
+  }
+}
+
+const guardedModelFetch: typeof fetch = async (input, init) => {
+  const url = input instanceof Request ? input.url : String(input);
+  await assertSafeModelRequest(url);
+  return fetch(input, { ...init, redirect: "error" });
+};
+
+export function createChatModel(config: ResolvedModelConfig) {
+  if (!config.apiKey) {
+    throw new Error("当前账号尚未配置模型 API Key，且服务器没有默认 Key");
+  }
+  const client = createOpenAI({
+    baseURL: config.baseUrl,
+    apiKey: config.apiKey,
+    name: config.source === "user" ? "user-chat" : "campus-chat",
+    ...(config.source === "user" ? { fetch: guardedModelFetch } : {}),
+  });
+  const primary = config.model;
+  const fallback = config.fallbackModel || primary;
+
+  return wrapLanguageModel({
+    model: client.chat(primary),
+    modelId: primary,
+    middleware: {
+      wrapStream: async ({ doStream, params }) => {
+        try {
+          return await doStream();
+        } catch (error) {
+          if (fallback !== primary && isNetworkOrTimeoutError(error)) {
+            console.warn(`[model] 主模型 ${primary} 调用失败，尝试备用模型 ${fallback}`);
+            return client.chat(fallback).doStream(params);
+          }
+          throw error;
         }
-        throw error;
-      }
+      },
+      wrapGenerate: async ({ doGenerate, params }) => {
+        try {
+          return await doGenerate();
+        } catch (error) {
+          if (fallback !== primary && isNetworkOrTimeoutError(error)) {
+            console.warn(`[model] 主模型 ${primary} 调用失败，尝试备用模型 ${fallback}`);
+            return client.chat(fallback).doGenerate(params);
+          }
+          throw error;
+        }
+      },
     },
-  },
-});
+  });
+}

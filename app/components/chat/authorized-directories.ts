@@ -1,42 +1,44 @@
 "use client";
 
-const DIRS_KEY = "campus-ai-authorized-dirs";
+type DirectoryResponse = {
+  directories?: string[];
+  error?: string;
+};
 
-export function loadAuthorizedDirs(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(DIRS_KEY) ?? "[]");
-    return Array.isArray(parsed)
-      ? parsed.filter((entry): entry is string => typeof entry === "string")
-      : [];
-  } catch {
-    return [];
+async function parseResponse(response: Response): Promise<DirectoryResponse> {
+  const data = (await response.json().catch(() => ({}))) as DirectoryResponse;
+  if (!response.ok) {
+    throw new Error(data.error || `目录服务返回 HTTP ${response.status}`);
   }
+  return data;
 }
 
-export function saveAuthorizedDirs(dirs: string[]): boolean {
-  if (typeof window !== "undefined") {
-    try {
-      window.localStorage.setItem(DIRS_KEY, JSON.stringify(dirs));
-      return true;
-    } catch (error) {
-      console.warn("[authorized-directories] 无法保存授权目录：", error);
-    }
-  }
-  return false;
-}
-
-export function addAuthorizedDirectory(dir: string): string[] {
-  const dirs = loadAuthorizedDirs();
-  if (!dirs.some((entry) => entry.toLowerCase() === dir.toLowerCase())) dirs.push(dir);
-  saveAuthorizedDirs(dirs);
-  return dirs;
-}
-
-export function removeAuthorizedDirectory(dir: string): string[] {
-  const dirs = loadAuthorizedDirs().filter(
-    (entry) => entry.toLowerCase() !== dir.toLowerCase(),
+/** 授权目录由服务端按登录用户持久化，浏览器不再充当授权来源。 */
+export async function loadAuthorizedDirs(): Promise<string[]> {
+  const data = await parseResponse(
+    await fetch("/api/agent/directories", { cache: "no-store" }),
   );
-  saveAuthorizedDirs(dirs);
-  return dirs;
+  return Array.isArray(data.directories) ? data.directories : [];
+}
+
+export async function addAuthorizedDirectory(dir: string): Promise<string[]> {
+  const data = await parseResponse(
+    await fetch("/api/agent/directories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: dir }),
+    }),
+  );
+  return Array.isArray(data.directories) ? data.directories : [];
+}
+
+export async function removeAuthorizedDirectory(dir: string): Promise<string[]> {
+  const data = await parseResponse(
+    await fetch("/api/agent/directories", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: dir }),
+    }),
+  );
+  return Array.isArray(data.directories) ? data.directories : [];
 }

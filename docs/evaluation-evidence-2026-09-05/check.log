@@ -1,0 +1,230 @@
+
+> campus-ai-assistant@0.1.0 check
+> npm test && npm run lint && npx tsc --noEmit && npm run eval:retrieval && npm run eval:e2e
+
+
+> campus-ai-assistant@0.1.0 test
+> node --test --no-warnings
+
+✔ 父请求取消会传递到组合信号 (0.8962ms)
+✔ 没有父信号时仍创建超时信号 (0.145ms)
+✔ 允许同源请求并拒绝伪造的跨站来源 (17.107ms)
+✔ 显式白名单可允许可信的反向代理前端 (0.2044ms)
+✔ 默认不信任可伪造的代理来源头 (0.2921ms)
+✔ 部署在可信反向代理后可显式启用代理头 (0.2672ms)
+✔ 固定窗口限流在窗口结束后自动恢复 (0.2656ms)
+✔ 缺失 MIME 时按扩展名识别文本附件 (0.5574ms)
+✔ 允许可安全提取的 Office Open XML 文档并限制大小 (0.2136ms)
+✔ 文本和图片使用不同的单文件大小限制 (0.1021ms)
+✔ 缺少客户端配置时采用安全默认值 (1.2775ms)
+✔ 显式关闭能力不会被默认值覆盖 (0.1435ms)
+✔ 缓存指纹区分不同能力边界 (0.1681ms)
+✔ 解码 URL 编码和 Base64 文本附件 (0.9038ms)
+✔ 文本附件被标记为不可信并截断，原消息保持不变 (0.9912ms)
+✔ 绕过前端提交的 PDF 被忽略并留下明确提示 (0.1394ms)
+✔ 提取最后一条用户文本并规范化缓存键 (0.1719ms)
+✔ 稳定校园问题进入知识库快速路径 (1.5868ms)
+✔ 实时问题保留联网与工具判断流程 (0.2059ms)
+✔ 通用申请问题不会被误判为校园知识库问题 (0.1048ms)
+✔ 长对话只保留最近消息并从用户轮次开始 (0.192ms)
+✔ 历史消息上限具有安全范围 (0.1518ms)
+✔ Agent 开关只在本地项目意图出现时激活工具 (0.7488ms)
+✔ Agent 修改任务获得比只读任务更高的动态步数预算 (0.3934ms)
+✔ 系统提示词只声明开启的能力 (23.5128ms)
+✔ 附件与工具结果都被明确视为不可信资料 (0.505ms)
+✔ 多字段问题要求逐项覆盖且不得静默遗漏 (0.3094ms)
+✔ 用户资料和预取知识被安全地写入提示词 (0.3237ms)
+✔ 连续失败达到阈值后短暂熔断 (0.7528ms)
+✔ 成功请求会重置失败计数 (0.586ms)
+✔ 持久化前移除附件 data URL 并保留文件名提示 (1.6342ms)
+✔ 保存和读取历史时不会重新引入附件负载 (0.5087ms)
+✔ 不同登录用户的本地会话互相隔离 (0.125ms)
+✔ 从 record 顶层读取 Dify reranker 分数 (1.6306ms)
+✔ 兼容 data.records 响应包裹 (0.1695ms)
+✔ 跨库选择先保留每个库的 top-1，而不是比较跨库分数 (0.2059ms)
+✔ 跨库轮转时去除重复内容 (0.1273ms)
+✔ 默认使用历史评测验证过的 semantic reranker 参数 (0.4375ms)
+✔ 包含精确课程号的查询使用混合检索 (0.2046ms)
+✔ 教师姓名与成果查询使用混合检索并扩大候选 (0.1491ms)
+✔ 教师精确问法提取姓名，泛化找人问题保留原查询 (1.7274ms)
+✔ 教师课程复合问法从评课卡片生成课程代码第二跳查询 (0.639ms)
+✔ 已经召回教师对应结构化课程时不做第二跳 (0.2077ms)
+✔ 环境变量可以显式覆盖按查询选择的检索方式 (0.1464ms)
+✔ 奖学金查询只路由到奖助学金数据集 (0.755ms)
+✔ 明确业务主题优先，不因申请和联系人扩散到通用库 (0.3641ms)
+✔ 课程号本身可以触发课程知识库路由 (0.1382ms)
+✔ 教师研究走教师库，单纯询问授课信息只走课程库 (0.2708ms)
+✔ 识别纯数字课堂号和校园自然表达 (0.1688ms)
+✔ 未命中主题时只回退到信息、政策与通知库 (0.3559ms)
+✔ 食堂和宿舍问题只路由到校园信息库 (0.3113ms)
+✔ 支持按数据集设置独立最低分数 (0.565ms)
+✔ 知识库缓存键隔离数据集和检索配置 (0.6919ms)
+✔ 下载文件名移除路径和 Windows 非法字符 (0.9233ms)
+✔ PDF 文本按测量宽度保留全部中英文字符 (0.6986ms)
+✔ 提取多个围栏代码块 (1.1124ms)
+✔ 无语言标注默认为 text (0.2771ms)
+✔ languageToExtension 常用映射 (0.2728ms)
+✔ 未知语言回退为 txt (0.1134ms)
+✔ 从 DOCX 主文档 XML 提取段落和制表符 (8.7343ms)
+✔ 从 XLSX 解析共享字符串与数值单元格 (3.8991ms)
+✔ 从 PPTX 按幻灯片顺序提取文本 (15.2545ms)
+✔ 只为国务院官方政策查询生成政策库关键词 (1.1228ms)
+✔ 政策库响应只保留 gov.cn 官方结果并清理 HTML (0.6991ms)
+✔ 解析普通 JSON 对象 (2.2057ms)
+✔ 剥离 ```json 代码围栏 (0.2635ms)
+✔ 剥离无语言标注的代码围栏 (0.1212ms)
+✔ 从杂文本中截取第一个 { 到最后一个 } (0.2118ms)
+✔ 非法 JSON 返回 ok:false 并保留 raw (0.1491ms)
+✔ 非字符串输入被防御性处理 (0.0982ms)
+✔ 读取合法 JSON (27.4049ms)
+✔ 根据声明长度提前拒绝过大请求 (1.8363ms)
+✔ 根据真实流字节数拒绝未声明长度的过大请求 (0.6201ms)
+✔ 非法 JSON 返回 400 类型错误 (0.43ms)
+✔ 天气查询补充绝对日期、完整字段和本地气象台关键词 (22.4344ms)
+✔ 天气查询能从自然语序中提取地点 (0.2788ms)
+✔ 校园查询展开学校别名但不使用会损害召回的 site 限定 (0.7248ms)
+✔ 校园人物查询自动补充学校上下文并生成聚焦的备用查询 (2.1635ms)
+✔ 通用查询把相对日期转换为绝对目标日期 (0.346ms)
+✔ 最新查询补充当前检索日期但保留用户指定年份 (0.3783ms)
+✔ 搜索结果删除风险内容并把官方来源排在前面 (3.4722ms)
+✔ 校园查询有 USTC 官方结果时删除非官方噪声 (0.5125ms)
+✔ 校园人物搜索保留直接命中的可信学术来源并删除无关校内页面 (0.4363ms)
+✔ 天气查询删除地点不一致的结果 (0.3575ms)
+✔ 扩展成人垃圾内容识别范围 (0.2447ms)
+✔ 通用搜索综合主题相关度与可信来源排序 (0.304ms)
+✔ 通用搜索去重并限制单一域名垄断上下文 (0.3873ms)
+✔ 只把有实质证据的搜索文本判定为可缓存结果 (0.2199ms)
+✔ 带绝对日期的天气查询删除旧日期页面和广告天气站 (0.6707ms)
+✔ 联网预算耗尽后仅关闭联网工具，知识库仍可继续检索 (0.3719ms)
+✔ Agent 模式保留更多文件和知识库检索步骤 (0.2299ms)
+✔ Agent 单工具达到预算后只关闭该工具 (0.2321ms)
+✔ requestIdFor 保留安全的上游请求 ID (20.7077ms)
+✔ requestIdFor 拒绝短 ID 和控制字符并生成 UUID (0.72ms)
+✔ withRequestId 写入响应头，context 使用相同规则 (2.3255ms)
+✔ errorMessage 统一未知异常 (0.1347ms)
+✔ 命令规则同时约束程序和参数前缀 (1.0586ms)
+✔ 旧版程序白名单不再允许任意参数 (0.1736ms)
+✔ 非法命令规则安全地退化为空规则 (0.5743ms)
+✔ 命令环境默认不会继承应用密钥 (1.0219ms)
+✔ 文件内容会识别二进制并遮蔽常见密钥 (0.5669ms)
+✔ 读取返回哈希，补丁使用哈希防止覆盖并发修改 (15.1838ms)
+✔ 文件查找和文本搜索有界且忽略依赖目录 (8.2938ms)
+✔ 请求取消会终止 Agent 子进程 (226.4609ms)
+✔ 仅允许授权目录及其子路径 (0.8049ms)
+✔ 客户端目录不能越过服务端允许根目录 (9.5019ms)
+✔ Agent 拒绝读取环境变量、凭据和认证数据 (11.7797ms)
+✔ TTL 到期后不再返回缓存值 (0.8865ms)
+✔ 超过容量时淘汰最久未使用项 (0.1916ms)
+✔ normalizes a valid profile (1.1675ms)
+✔ rejects invalid ages and cleans major text (0.164ms)
+✔ profile fingerprint separates cached answers (0.2533ms)
+✔ suggestions reflect both age and major (0.3504ms)
+✔ does not repeat the 专业 suffix in suggestions (0.2618ms)
+{"timestamp":"2026-09-05T02:49:14.983Z","level":"info","event":"web_search.started","requestId":"web-search-test","scope":"test","queryChars":24,"candidateQueries":1,"callNumber":1}
+{"timestamp":"2026-09-05T02:49:14.998Z","level":"info","event":"web_search.completed","requestId":"web-search-test","scope":"test","durationMs":15,"workflowChars":101,"officialChars":0,"safeChars":101,"attempts":1}
+{"timestamp":"2026-09-05T02:49:14.999Z","level":"info","event":"web_search.cache_hit","requestId":"web-search-cache-test","scope":"test","queryChars":24}
+✔ 联网工具返回经过筛选的 Dify 结果并复用安全缓存 (18.1362ms)
+✔ 事实断言支持 all、any 和 none (0.9693ms)
+✔ 召回评测按独立事实计算 hit@k 与倒数排名 (0.6022ms)
+✔ 失败断言报告缺失词而不保存原始答案 (2.751ms)
+✔ 延迟分位数使用 nearest-rank (0.3189ms)
+✔ 汇总输出准确率、MRR 和延迟 (0.3275ms)
+✔ 解析 AI SDK UI message SSE 文本与工具 (0.3724ms)
+✔ 语料校验拒绝规模不足的伪端到端评测 (0.4586ms)
+✔ 教师主页解析研究方向、成果栏目和更新时间 (1.9661ms)
+✔ 成果页提取总数和首屏条目 (0.5603ms)
+✔ 知识记录明确区分未填写字段与已公开成果 (1.2982ms)
+ℹ tests 125
+ℹ suites 0
+ℹ pass 125
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 641.7409
+
+> campus-ai-assistant@0.1.0 lint
+> eslint
+
+
+> campus-ai-assistant@0.1.0 eval:retrieval
+> node --no-warnings scripts/eval-retrieval.mjs
+
+{"suite":"routing","passed":14,"total":14,"failures":[]}
+
+> campus-ai-assistant@0.1.0 eval:e2e
+> node --no-warnings scripts/eval-campus-e2e.mjs --strict
+
+{
+  "generatedAt": "2026-09-05T02:49:20.976Z",
+  "corpus": "evals\\campus-e2e-cases.json",
+  "corpusVersion": 1,
+  "selectedCases": 62,
+  "routing": {
+    "passed": 62,
+    "total": 62,
+    "accuracy": 1,
+    "byCategory": {
+      "faculty": {
+        "passed": 11,
+        "total": 11,
+        "accuracy": 1
+      },
+      "multi-domain": {
+        "passed": 5,
+        "total": 5,
+        "accuracy": 1
+      },
+      "courses": {
+        "passed": 10,
+        "total": 10,
+        "accuracy": 1
+      },
+      "campus-info": {
+        "passed": 7,
+        "total": 7,
+        "accuracy": 1
+      },
+      "library": {
+        "passed": 5,
+        "total": 5,
+        "accuracy": 1
+      },
+      "scholarships": {
+        "passed": 5,
+        "total": 5,
+        "accuracy": 1
+      },
+      "shuttle": {
+        "passed": 5,
+        "total": 5,
+        "accuracy": 1
+      },
+      "calendar": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1
+      },
+      "policies": {
+        "passed": 5,
+        "total": 5,
+        "accuracy": 1
+      },
+      "notices": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1
+      },
+      "fallback": {
+        "passed": 1,
+        "total": 1,
+        "accuracy": 1
+      }
+    },
+    "failures": []
+  },
+  "qualityGate": {
+    "passed": true,
+    "failures": []
+  }
+}

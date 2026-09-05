@@ -7,9 +7,10 @@ import {
   tool,
   type ToolSet,
 } from "ai";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { chatModel } from "../../lib/ai-clients";
+import { createChatModel } from "../../lib/ai-clients";
+import { getAuthenticatedUser, unauthorizedResponse } from "../../lib/auth-session";
+import { getResolvedModelConfig } from "../../lib/auth-store";
 import {
   getDifyKnowledgeConfig,
   retrieveKnowledgeContext,
@@ -46,12 +47,11 @@ import {
   sanitizeMessagesForModel,
   type RawChatMessage,
 } from "../../lib/chat-messages";
-import { createFsTools } from "../../lib/tools/fs-tools";
-import { resolveAuthorizedDirectories } from "../../lib/tools/sandbox";
+import { createAgentRuntimeContext } from "../../lib/tools/agent-runtime";
 import {
+  AGENT_TOOL_CALL_LIMITS,
   MAX_WEB_SEARCH_CALLS,
   activeToolNamesForStep,
-  finalAnswerStepForCapabilities,
   type RetrievalUsage,
 } from "../../lib/search-policy";
 
@@ -143,9 +143,65 @@ function createQueryKnowledgeBaseTool(
 /** 单轮问答结果缓存 TTL（毫秒） */
 const ANSWER_CACHE_TTL_MS = 3 * 60 * 1000;
 const answerCache = new TtlLruCache<string, string>(200, ANSWER_CACHE_TTL_MS);
-const TOOL_APPROVAL_SECRET =
-  process.env.TOOL_APPROVAL_SECRET?.trim() || randomUUID();
 
+function priorAgentToolUsage(rawMessages: unknown[]): Record<string, number> {
+  const lastUserIndex = rawMessages.findLastIndex(
+    (message) => (message as { role?: string } | null)?.role === "user",
+  );
+  const seenCalls = new Set<string>();
+  const counts: Record<string, number> = {};
+  for (const message of rawMessages.slice(Math.max(0, lastUserIndex))) {
+    const parts = (message as { parts?: unknown[] } | null)?.parts;
+    if (!Array.isArray(parts)) continue;
+    for (const partValue of parts) {
+      if (!partValue || typeof partValue !== "object") continue;
+      const part = partValue as { type?: unknown; toolCallId?: unknown };
+      if (typeof part.type !== "string" || !part.type.startsWith("tool-")) continue;
+      const toolName = part.type.slice("tool-".length);
+      if (!(toolName in AGENT_TOOL_CALL_LIMITS)) continue;
+      const callId = typeof part.toolCallId === "string"
+        ? part.toolCallId
+        : `${toolName}:${seenCalls.size}`;
+      if (seenCalls.has(callId)) continue;
+      seenCalls.add(callId);
+      counts[toolName] = (counts[toolName] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+function logLatestApprovalResponses(
+  rawMessages: unknown[],
+  telemetry: TelemetryContext,
+  userId: string,
+): void {
+  const latestAssistant = [...rawMessages]
+    .reverse()
+    .find((message) => (message as { role?: string } | null)?.role === "assistant") as
+    | { parts?: unknown[] }
+    | undefined;
+  if (!Array.isArray(latestAssistant?.parts)) return;
+  for (const partValue of latestAssistant.parts) {
+    if (!partValue || typeof partValue !== "object") continue;
+    const part = partValue as {
+      type?: unknown;
+      state?: unknown;
+      approval?: { approved?: unknown };
+    };
+    if (
+      typeof part.type === "string" &&
+      part.type.startsWith("tool-") &&
+      part.state === "approval-responded" &&
+      typeof part.approval?.approved === "boolean"
+    ) {
+      logEvent(telemetry, "agent.approval_received", {
+        userId,
+        tool: part.type.slice("tool-".length),
+        approved: part.approval.approved,
+      });
+    }
+  }
+}
 /** 把缓存文本包装成 AI SDK UI message stream。 */
 function cachedUIMessageResponse(text: string, requestId: string): Response {
   const stream = createUIMessageStream({
@@ -171,6 +227,10 @@ export async function POST(req: Request) {
   if (blocked) {
     logEvent(telemetry, "request.blocked", { status: blocked.status }, "warn");
     return withRequestId(blocked, telemetry.requestId);
+  }
+  const authenticatedUser = await getAuthenticatedUser(req);
+  if (!authenticatedUser) {
+    return withRequestId(unauthorizedResponse(), telemetry.requestId);
   }
 
   // 全链路耗时打点：请求进入 → 首块文本 → 各 step → 流结束
@@ -207,19 +267,26 @@ export async function POST(req: Request) {
 
   const capabilities = normalizeCapabilities(body.capabilities);
   const userProfile = normalizeUserProfile(body.userProfile);
-  const requestedDirs =
-    capabilities.agent && Array.isArray(body.authorizedDirectories)
-      ? body.authorizedDirectories.filter(
-          (entry): entry is string =>
-            typeof entry === "string" && entry.length <= 1_024,
-        ).slice(0, 16)
-      : [];
-  const authorizedDirs = capabilities.agent
-    ? await resolveAuthorizedDirectories(requestedDirs)
-    : [];
+  logLatestApprovalResponses(rawMessages, telemetry, authenticatedUser.id);
 
   // 单轮问答的结果缓存：同一问题短时间内直接复用上一次回答
   const lastUserText = extractLastUserText(rawMessages);
+  const agentRuntime = await createAgentRuntimeContext({
+    requested: capabilities.agent,
+    query: lastUserText,
+    userId: authenticatedUser.id,
+    signal: req.signal,
+    telemetry,
+  });
+  const agentToolsNeeded = agentRuntime.activated;
+  const authorizedDirs = agentRuntime.authorizedDirectories;
+  const localAgentBlocked = agentToolsNeeded && authorizedDirs.length === 0;
+  const effectiveCapabilities = {
+    ...capabilities,
+    knowledgeBase: localAgentBlocked ? false : capabilities.knowledgeBase,
+    webSearch: localAgentBlocked ? false : capabilities.webSearch,
+    agent: agentRuntime.activated,
+  };
   const isSingleTurn =
     Array.isArray(rawMessages) &&
     rawMessages.filter((m) => (m as { role?: string }).role === "user").length === 1;
@@ -227,7 +294,7 @@ export async function POST(req: Request) {
     Array.isArray((m as { parts?: unknown[] }).parts) &&
     (m as { parts: Array<{ type?: string }> }).parts.some((part) => part.type === "file"),
   );
-  const sessionId =
+  const conversationId =
     typeof body.id === "string" && body.id.trim()
       ? body.id.trim().slice(0, 128)
       : "anonymous";
@@ -237,7 +304,7 @@ export async function POST(req: Request) {
     .join("|");
   const cacheKey =
     isSingleTurn && !hasAttachments && lastUserText
-      ? `${sessionId}::${capabilityFingerprint(capabilities)}::${userProfileFingerprint(userProfile)}::${dirsFingerprint}::${normalizeQueryKey(lastUserText)}`
+      ? `${authenticatedUser.id}::${conversationId}::${capabilityFingerprint(effectiveCapabilities)}::${userProfileFingerprint(userProfile)}::${dirsFingerprint}::${normalizeQueryKey(lastUserText)}`
       : null;
   if (cacheKey) {
     const cached = answerCache.get(cacheKey);
@@ -253,8 +320,8 @@ export async function POST(req: Request) {
   let prefetchedKnowledge: KnowledgeRetrievalResult | null = null;
   const knowledgeConfig = getDifyKnowledgeConfig();
   const canUseKnowledgeFastPath =
-    capabilities.knowledgeBase &&
-    !capabilities.agent &&
+    effectiveCapabilities.knowledgeBase &&
+    !agentToolsNeeded &&
     isSingleTurn &&
     !hasAttachments &&
     shouldPrefetchKnowledge(lastUserText) &&
@@ -306,31 +373,51 @@ export async function POST(req: Request) {
   const enabledTools: ToolSet = {};
   const retrievalUsage: RetrievalUsage = {
     webSearches: 0,
+    agentToolCalls: priorAgentToolUsage(rawMessages),
   };
-  if (capabilities.knowledgeBase && !prefetchedKnowledge) {
+  if (effectiveCapabilities.knowledgeBase && !prefetchedKnowledge && !localAgentBlocked) {
     enabledTools.query_knowledge_base =
       createQueryKnowledgeBaseTool(req.signal, telemetry);
   }
-  if (capabilities.webSearch && !prefetchedKnowledge) {
+  if (effectiveCapabilities.webSearch && !prefetchedKnowledge && !localAgentBlocked) {
     enabledTools.web_search = createWebSearchTool(
       retrievalUsage,
       req.signal,
       telemetry,
     );
   }
-  if (capabilities.agent) {
-    Object.assign(enabledTools, createFsTools(authorizedDirs));
-  }
+  Object.assign(enabledTools, agentRuntime.tools);
   let usedAgentTool = false;
 
   const systemPrompt = buildSystemPrompt(
-    capabilities,
+    effectiveCapabilities,
     userProfile,
     prefetchedKnowledge,
+    authorizedDirs.length > 0,
   );
-  const finalAnswerStep = finalAnswerStepForCapabilities(capabilities.agent);
+  let requestModel;
+  try {
+    requestModel = createChatModel(
+      await getResolvedModelConfig(authenticatedUser.id),
+    );
+  } catch (error) {
+    logEvent(
+      telemetry,
+      "model.configuration_failed",
+      { error: errorMessage(error) },
+      "warn",
+    );
+    return withRequestId(
+      Response.json(
+        { error: "模型尚未正确配置，请在设置中填写 API URL、Key 和模型名称" },
+        { status: 400 },
+      ),
+      telemetry.requestId,
+    );
+  }
+  const finalAnswerStep = agentRuntime.finalAnswerStep;
   const result = streamText({
-    model: chatModel,
+    model: requestModel,
     abortSignal: req.signal,
     system: systemPrompt,
     messages: await convertToModelMessages(
@@ -347,12 +434,12 @@ export async function POST(req: Request) {
         finalAnswerStep,
       );
       const webSearchBudgetExhausted =
-        capabilities.webSearch &&
+        effectiveCapabilities.webSearch &&
         retrievalUsage.webSearches >= MAX_WEB_SEARCH_CALLS;
       const shouldFinalize =
         stepNumber >= finalAnswerStep ||
         activeTools.length === 0 ||
-        (!capabilities.agent && webSearchBudgetExhausted);
+        (!agentToolsNeeded && webSearchBudgetExhausted);
       if (shouldFinalize) {
         return {
           activeTools: [],
@@ -365,22 +452,32 @@ export async function POST(req: Request) {
       }
       return { activeTools };
     },
-    ...(capabilities.agent
+    ...(agentRuntime.toolApproval && agentRuntime.toolApprovalSecret
       ? {
-          toolApproval: {
-            write_file: "user-approval" as const,
-            execute_command: "user-approval" as const,
-            list_dir: "approved" as const,
-            read_file: "approved" as const,
-          },
-          experimental_toolApprovalSecret: TOOL_APPROVAL_SECRET,
+          toolApproval: agentRuntime.toolApproval,
+          experimental_toolApprovalSecret: agentRuntime.toolApprovalSecret,
         }
       : {}),
     // 每个 step（一轮模型调用/工具调用）结束时打印耗时与工具名
     onStepFinish: ({ stepNumber, toolCalls, text, usage, performance, finishReason }) => {
       usedAgentTool ||= toolCalls.some((call) =>
-        ["list_dir", "read_file", "write_file", "execute_command"].includes(call.toolName),
+        [
+          "list_dir",
+          "find_files",
+          "search_text",
+          "read_file",
+          "write_file",
+          "apply_patch",
+          "execute_command",
+        ].includes(call.toolName),
       );
+      for (const call of toolCalls) {
+        if (retrievalUsage.agentToolCalls && call.toolName in retrievalUsage.agentToolCalls) {
+          retrievalUsage.agentToolCalls[call.toolName] += 1;
+        } else if (call.toolName in AGENT_TOOL_CALL_LIMITS) {
+          retrievalUsage.agentToolCalls![call.toolName] = 1;
+        }
+      }
       logEvent(telemetry, "chat.step_completed", {
         stepNumber,
         elapsedMs: Date.now() - requestStart,
@@ -396,9 +493,11 @@ export async function POST(req: Request) {
 
   logEvent(telemetry, "chat.stream_created", {
     durationMs: Date.now() - requestStart,
-    knowledgeBase: capabilities.knowledgeBase,
-    webSearch: capabilities.webSearch,
-    agent: capabilities.agent,
+    knowledgeBase: effectiveCapabilities.knowledgeBase,
+    webSearch: effectiveCapabilities.webSearch,
+    agentRequested: capabilities.agent,
+    agentActivated: agentToolsNeeded,
+    authorizedDirectoryCount: authorizedDirs.length,
   });
 
   // 完成后缓存本次回答文本（供下一次相同问题直接命中）

@@ -43,9 +43,15 @@ test("持久化前移除附件 data URL 并保留文件名提示", () => {
 
 test("保存和读取历史时不会重新引入附件负载", () => {
   const storage = memoryStorage();
-  assert.equal(saveConversationMessages("chat-1", messages, storage), true);
-  assert.doesNotMatch(storage.value("campus-ai-conversations:chat-1"), /base64/);
-  const restored = loadConversationMessages("chat-1", storage);
+  assert.equal(saveConversationMessages("chat-1", messages, "user-1", storage), true);
+  assert.doesNotMatch(storage.value("campus-ai-conversations:user-1:chat-1"), /base64/);
+  const restored = loadConversationMessages("chat-1", "user-1", storage);
   assert.equal(restored.length, 1);
   assert.match(JSON.stringify(restored), /notes\.txt/);
+});
+
+test("不同登录用户的本地会话互相隔离", () => {
+  const storage = memoryStorage();
+  assert.equal(saveConversationMessages("chat-1", messages, "user-a", storage), true);
+  assert.equal(loadConversationMessages("chat-1", "user-b", storage).length, 0);
 });

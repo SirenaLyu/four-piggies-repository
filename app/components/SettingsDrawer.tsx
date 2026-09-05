@@ -1,4 +1,6 @@
 import type { AssistantCapabilities } from "../lib/capabilities";
+import type { SignedInUser } from "./AuthGate";
+import { ModelConfigPanel } from "./ModelConfigPanel";
 
 const THEME_COLORS = [
   { key: "blue", label: "科大蓝", color: "#0046ad" },
@@ -25,7 +27,7 @@ const CAPABILITY_OPTIONS: Array<{
   {
     key: "agent",
     label: "Agent 能力",
-    description: "读取授权目录；写入和命令执行仍需确认",
+    description: "按账号授权本地目录；读取、修改和执行逐次确认",
   },
 ];
 
@@ -38,6 +40,7 @@ export type UserProfileDraft = {
 
 export type SettingsDrawerProps = {
   open: boolean;
+  user: SignedInUser;
   controlsDisabled: boolean;
   capabilities: AssistantCapabilities;
   profileDraft: UserProfileDraft;
@@ -56,6 +59,7 @@ export type SettingsDrawerProps = {
 
 export function SettingsDrawer({
   open,
+  user,
   controlsDisabled,
   capabilities,
   profileDraft,
@@ -75,7 +79,7 @@ export function SettingsDrawer({
   return (
     <>
       <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
-      <div className="fixed top-0 right-0 h-full w-80 bg-surface border-l border-border z-50 shadow-xl flex flex-col">
+      <div className="fixed top-0 right-0 h-full w-96 max-w-full bg-surface border-l border-border z-50 shadow-xl flex flex-col">
         <div className="px-4 py-3 border-b border-border flex items-center justify-between">
           <h3 className="text-sm font-semibold text-foreground">设置</h3>
           <button
@@ -88,6 +92,8 @@ export function SettingsDrawer({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+          <ModelConfigPanel user={user} />
+          <div className="border-t border-border" />
           <form
             onSubmit={(event) => {
               event.preventDefault();

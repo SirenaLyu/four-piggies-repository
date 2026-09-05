@@ -41,10 +41,29 @@ export function summarizeApproval(approval: PendingApproval): string {
   }
   if (approval.toolName === "write_file") {
     const content = String(input.content ?? "");
-    const preview = content.length > 200 ? `${content.slice(0, 200)}…` : content;
+    const preview = content.length > 600 ? `${content.slice(0, 600)}…` : content;
     return `写入: ${String(input.path ?? "")}` +
       (input.cwd ? `\ncwd: ${String(input.cwd)}` : "") +
+      `\n模式: ${input.overwrite ? "覆盖（需要哈希校验）" : "仅新建"}` +
+      `\n字符数: ${content.length}` +
       `\n\n${preview}`;
+  }
+  if (approval.toolName === "apply_patch") {
+    const replacements = Array.isArray(input.replacements)
+      ? input.replacements as Array<Record<string, unknown>>
+      : [];
+    const preview = replacements.slice(0, 3).map((replacement, index) => {
+      const before = String(replacement.oldText ?? "").slice(0, 240);
+      const after = String(replacement.newText ?? "").slice(0, 240);
+      return `变更 ${index + 1}\n- ${before}\n+ ${after}`;
+    }).join("\n\n");
+    return `补丁目标: ${String(input.path ?? "")}\n哈希: ${String(input.expectedSha256 ?? "").slice(0, 12)}…\n变更数: ${replacements.length}\n\n${preview}`;
+  }
+  if (approval.toolName === "read_file") {
+    return `读取并发送到当前模型 API: ${String(input.path ?? "")}\n行范围: ${String(input.startLine ?? 1)}–${String(input.endLine ?? "自动上限")}`;
+  }
+  if (approval.toolName === "search_text") {
+    return `在本地文件中搜索并发送匹配片段到当前模型 API\n目录: ${String(input.root ?? "")}\n关键词: ${String(input.query ?? "")}\n文件: ${String(input.filePattern ?? "全部文本文件")}`;
   }
   return JSON.stringify(input, null, 2).slice(0, 500);
 }

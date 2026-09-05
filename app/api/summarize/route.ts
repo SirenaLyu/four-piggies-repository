@@ -1,5 +1,7 @@
 import { generateText } from "ai";
-import { chatClient, CHAT_MODEL } from "../../lib/ai-clients";
+import { createChatModel } from "../../lib/ai-clients";
+import { getAuthenticatedUser, unauthorizedResponse } from "../../lib/auth-session";
+import { getResolvedModelConfig } from "../../lib/auth-store";
 import { guardApiRequest } from "../../lib/api-security";
 import {
   createTelemetryContext,
@@ -33,6 +35,8 @@ export async function POST(req: Request) {
     logEvent(telemetry, "request.blocked", { status: blocked.status }, "warn");
     return respond(blocked);
   }
+  const authenticatedUser = await getAuthenticatedUser(req);
+  if (!authenticatedUser) return respond(unauthorizedResponse());
 
   let body: { messages?: SummarizeMessage[] };
   try {
@@ -70,8 +74,11 @@ export async function POST(req: Request) {
   const assistantText = (assistantMsg?.text ?? "").slice(0, 800);
 
   try {
+    const model = createChatModel(
+      await getResolvedModelConfig(authenticatedUser.id),
+    );
     const result = await generateText({
-      model: chatClient.chat(CHAT_MODEL),
+      model,
       abortSignal: req.signal,
       system: SYSTEM_PROMPT,
       prompt: `用户问题：${userText}\n\n助手回答：${assistantText}`,

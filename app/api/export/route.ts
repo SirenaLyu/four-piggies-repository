@@ -1,5 +1,7 @@
 import { generateText } from "ai";
-import { chatClient, CHAT_MODEL } from "../../lib/ai-clients";
+import { createChatModel } from "../../lib/ai-clients";
+import { getAuthenticatedUser, unauthorizedResponse } from "../../lib/auth-session";
+import { getResolvedModelConfig } from "../../lib/auth-store";
 import { parseLlmJson } from "../../lib/parse-llm-json";
 import type { ExportFileDescriptor, ExportFileFormat } from "../../lib/export";
 import { guardApiRequest } from "../../lib/api-security";
@@ -92,6 +94,8 @@ export async function POST(req: Request) {
     logEvent(telemetry, "request.blocked", { status: blocked.status }, "warn");
     return respond(blocked);
   }
+  const authenticatedUser = await getAuthenticatedUser(req);
+  if (!authenticatedUser) return respond(unauthorizedResponse());
 
   let body: { messages?: ExportMessage[] };
   try {
@@ -131,8 +135,11 @@ export async function POST(req: Request) {
   const transcript = buildTranscript(trimmed);
 
   try {
+    const model = createChatModel(
+      await getResolvedModelConfig(authenticatedUser.id),
+    );
     const result = await generateText({
-      model: chatClient.chat(CHAT_MODEL),
+      model,
       abortSignal: req.signal,
       system: SYSTEM_PROMPT,
       prompt: transcript,
