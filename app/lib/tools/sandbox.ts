@@ -75,10 +75,13 @@ export async function resolveAuthorizedDirectories(
   const accepted: string[] = [];
   for (const requested of requestedDirs) {
     if (typeof requested !== "string" || !requested.trim()) continue;
-    const lexical = authorizePath(requested, serverRoots);
+    // 先 realpath 规范化再词法检查：Windows 下客户端路径可能带 8.3 短名或
+    // 不同大小写，字符串级比较会误拒/误放；规范化后比较才与真实文件一致。
+    const canonical = await realDirectory(requested);
+    if (!canonical) continue;
+    const lexical = authorizePath(canonical, serverRoots);
     if (!lexical.ok) continue;
-    const canonical = await realDirectory(lexical.path);
-    if (!canonical || !serverRoots.some((root) => isInside(canonical, root))) continue;
+    if (!serverRoots.some((root) => isInside(canonical, root))) continue;
     if (!accepted.some((entry) => entry.toLowerCase() === canonical.toLowerCase())) {
       accepted.push(canonical);
     }

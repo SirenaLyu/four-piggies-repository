@@ -1,6 +1,7 @@
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 
 export const MAX_WEB_SEARCH_CALLS = 2;
+export const MAX_URL_FETCH_CALLS = 3;
 export const FINAL_ANSWER_STEP = 3;
 export const AGENT_FINAL_ANSWER_STEP = 6;
 export const AGENT_TOOL_CALL_LIMITS: Record<string, number> = {
@@ -16,6 +17,8 @@ export const AGENT_TOOL_CALL_LIMITS: Record<string, number> = {
 export interface RetrievalUsage {
   webSearches: number;
   agentToolCalls?: Record<string, number>;
+  /** fetch_url 网页阅读次数；未用时可缺省 */
+  urlFetches?: number;
 }
 
 export function finalAnswerStepForCapabilities(agentEnabled: boolean): number {
@@ -514,6 +517,9 @@ export function activeToolNamesForStep(
   return toolNames.filter((toolName) => {
     if (toolName === "web_search") {
       return usage.webSearches < MAX_WEB_SEARCH_CALLS;
+    }
+    if (toolName === "fetch_url") {
+      return (usage.urlFetches ?? 0) < MAX_URL_FETCH_CALLS;
     }
     const limit = AGENT_TOOL_CALL_LIMITS[toolName];
     if (limit != null) {

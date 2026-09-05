@@ -21,7 +21,11 @@ import {
 } from "../../lib/dify-knowledge";
 import { TtlLruCache } from "../../lib/ttl-lru-cache";
 import { guardApiRequest } from "../../lib/api-security";
-import { createWebSearchTool } from "../../lib/web-search-tool";
+import {
+  createWebSearchTool,
+  isUsableWebResult,
+  runWebSearchPipeline,
+} from "../../lib/web-search-tool";
 import { readJsonBody, RequestBodyError } from "../../lib/request-body";
 import {
   createTelemetryContext,
@@ -41,6 +45,7 @@ import {
 import {
   modelHistoryLimit,
   selectRecentMessages,
+  shouldDualChannelPrefetch,
   shouldPrefetchKnowledge,
 } from "../../lib/chat-performance";
 import {
@@ -56,6 +61,7 @@ import {
   activeToolNamesForStep,
   type RetrievalUsage,
 } from "../../lib/search-policy";
+import { createUrlFetchTool } from "../../lib/tools/fetch-url-tool";
 
 // ============================================================================
 // 工具定义
@@ -322,21 +328,84 @@ export async function POST(req: Request) {
     }
   }
 
-  // 稳定且主题明确的单轮校园问题直接预取知识库，减少一次模型工具选择往返。
+  // 双通道并行预取：稳定校园主题与时效性问题同时命中时，知识库与联网检索
+  // 并发执行；普通稳定问题仍走知识库单通道快路径。
   let prefetchedKnowledge: KnowledgeRetrievalResult | null = null;
+  let prefetchedWeb: string | null = null;
+  let collectedSources: AnswerSource[] = [];
+  const onSources = (sources: AnswerSource[]) => {
+    collectedSources = mergeSources(collectedSources, sources);
+  };
+  const retrievalUsage: RetrievalUsage = {
+    webSearches: 0,
+    agentToolCalls: priorAgentToolUsage(rawMessages),
+  };
   const knowledgeConfig = getDifyKnowledgeConfig();
-  const canUseKnowledgeFastPath =
-    effectiveCapabilities.knowledgeBase &&
+  const canPrefetchBase =
     !agentToolsNeeded &&
     isSingleTurn &&
     !hasAttachments &&
-    shouldPrefetchKnowledge(lastUserText) &&
     Boolean(
       knowledgeConfig.baseUrl &&
         knowledgeConfig.apiKey &&
         knowledgeConfig.datasetIds.length > 0,
     );
-  if (canUseKnowledgeFastPath) {
+  const dualPrefetchEligible =
+    effectiveCapabilities.knowledgeBase &&
+    effectiveCapabilities.webSearch &&
+    canPrefetchBase &&
+    shouldDualChannelPrefetch(lastUserText);
+  const canUseKnowledgeFastPath =
+    effectiveCapabilities.knowledgeBase &&
+    !dualPrefetchEligible &&
+    canPrefetchBase &&
+    shouldPrefetchKnowledge(lastUserText);
+  let dualPrefetchAttempted = false;
+  if (dualPrefetchEligible) {
+    dualPrefetchAttempted = true;
+    const startedAt = Date.now();
+    logEvent(telemetry, "knowledge.dual_prefetch_started", {
+      queryChars: lastUserText.length,
+    });
+    const [kbResult, webText] = await Promise.all([
+      retrieveKnowledgeContext(lastUserText, req.signal, telemetry),
+      runWebSearchPipeline(lastUserText, {
+        signal: req.signal,
+        telemetry,
+        usage: retrievalUsage,
+        onSources,
+      }),
+    ]);
+    if (kbResult.ok && kbResult.context) {
+      prefetchedKnowledge = kbResult;
+      onSources(kbResult.sources ?? []);
+      logEvent(telemetry, "knowledge.prefetch_completed", {
+        durationMs: Date.now() - startedAt,
+        chunkCount: kbResult.chunkCount,
+      });
+    } else {
+      logEvent(
+        telemetry,
+        "knowledge.prefetch_empty",
+        {
+          durationMs: Date.now() - startedAt,
+          reason: kbResult.error ?? "no_result",
+        },
+        "warn",
+      );
+    }
+    if (isUsableWebResult(webText)) {
+      prefetchedWeb = webText;
+      logEvent(telemetry, "web_search.prefetch_completed", {
+        durationMs: Date.now() - startedAt,
+      });
+    } else {
+      logEvent(telemetry, "web_search.prefetch_empty", {}, "warn");
+    }
+    logEvent(telemetry, "chat.dual_prefetch_completed", {
+      durationMs: Date.now() - startedAt,
+    });
+  } else if (canUseKnowledgeFastPath) {
     const startedAt = Date.now();
     const result = await retrieveKnowledgeContext(
       lastUserText,
@@ -345,6 +414,7 @@ export async function POST(req: Request) {
     );
     if (result.ok && result.context) {
       prefetchedKnowledge = result;
+      onSources(result.sources ?? []);
       logEvent(telemetry, "knowledge.prefetch_completed", {
         durationMs: Date.now() - startedAt,
         chunkCount: result.chunkCount,
@@ -377,24 +447,35 @@ export async function POST(req: Request) {
   const messages = sanitizeMessagesForModel(recentMessages);
 
   const enabledTools: ToolSet = {};
-  let collectedSources: AnswerSource[] = prefetchedKnowledge?.sources ?? [];
-  const onSources = (sources: AnswerSource[]) => {
-    collectedSources = mergeSources(collectedSources, sources);
-  };
-  const retrievalUsage: RetrievalUsage = {
-    webSearches: 0,
-    agentToolCalls: priorAgentToolUsage(rawMessages),
-  };
-  if (effectiveCapabilities.knowledgeBase && !prefetchedKnowledge && !localAgentBlocked) {
+  const kbPrefetched = prefetchedKnowledge !== null;
+  // 双通道预取后只注册“缺失通道”的工具，避免模型重复检索已有资料的通道；
+  // 知识库快路径（单通道预取成功）保持原行为：本轮不再开放联网检索。
+  const webToolClosedByKbFastPath = kbPrefetched && !dualPrefetchAttempted;
+  const webToolOpen = Boolean(
+    effectiveCapabilities.webSearch &&
+      !prefetchedWeb &&
+      !webToolClosedByKbFastPath &&
+      !localAgentBlocked,
+  );
+  if (effectiveCapabilities.knowledgeBase && !kbPrefetched && !localAgentBlocked) {
     enabledTools.query_knowledge_base =
       createQueryKnowledgeBaseTool(req.signal, telemetry, onSources);
   }
-  if (effectiveCapabilities.webSearch && !prefetchedKnowledge && !localAgentBlocked) {
+  if (webToolOpen) {
     enabledTools.web_search = createWebSearchTool(
       retrievalUsage,
       req.signal,
       telemetry,
       onSources,
+    );
+  }
+  // 联网预取资料只有摘要时，模型也需要打开链接读全文：
+  // 只要联网能力开启且存在可读链接来源（搜索工具开放或已有联网预取）即注册。
+  if (effectiveCapabilities.webSearch && (webToolOpen || prefetchedWeb)) {
+    enabledTools.fetch_url = createUrlFetchTool(
+      retrievalUsage,
+      req.signal,
+      telemetry,
     );
   }
   Object.assign(enabledTools, agentRuntime.tools);
@@ -417,6 +498,8 @@ export async function POST(req: Request) {
     effectiveCapabilities,
     userProfile,
     prefetchedKnowledge,
+    prefetchedWeb,
+    webToolOpen,
     authorizedDirs.length > 0,
     memory,
   );

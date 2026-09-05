@@ -36,6 +36,21 @@ export function shouldPrefetchKnowledge(query: string): boolean {
   );
 }
 
+/**
+ * “稳定校园主题 + 时效词”混合问题走双通道预取：知识库提供政策/流程基准，
+ * 联网补充最新变动，两路并发检索后由模型一步综合，避免串行工具往返。
+ * 纯实时（无稳定主题词）或纯稳定（无时效词）的问题不触发，保持单通道成本。
+ */
+export function shouldDualChannelPrefetch(query: string): boolean {
+  const normalized = query.trim();
+  return (
+    normalized.length >= 4 &&
+    normalized.length <= 200 &&
+    STABLE_CAMPUS_TOPIC.test(normalized) &&
+    REALTIME_QUERY.test(normalized)
+  );
+}
+
 /** Agent 开关是能力上限；只有当前问题确实涉及本地项目时才注册高风险工具。 */
 export function shouldUseAgentTools(query: string): boolean {
   const normalized = query.trim();

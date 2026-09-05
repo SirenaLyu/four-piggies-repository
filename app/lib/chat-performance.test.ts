@@ -4,6 +4,7 @@ import {
   agentFinalAnswerStep,
   modelHistoryLimit,
   selectRecentMessages,
+  shouldDualChannelPrefetch,
   shouldPrefetchKnowledge,
   shouldUseAgentTools,
 } from "./chat-performance.ts";
@@ -28,6 +29,23 @@ test("实时问题保留联网与工具判断流程", () => {
     false,
   );
   assert.equal(shouldPrefetchKnowledge("合肥现在天气怎么样？"), false);
+});
+
+test("稳定校园主题叠加时效词触发双通道并行预取", () => {
+  assert.equal(
+    shouldDualChannelPrefetch("科大最新的奖学金评定政策是什么？"),
+    true,
+  );
+  assert.equal(
+    shouldDualChannelPrefetch("图书馆最近的开闭馆时间有变更吗"),
+    true,
+  );
+  // 纯稳定问题保持知识库单通道，不额外发起联网检索。
+  assert.equal(shouldDualChannelPrefetch("图书馆怎么借书？"), false);
+  // 纯时效问题无稳定校园主题，不触发双通道。
+  assert.equal(shouldDualChannelPrefetch("合肥现在天气怎么样？"), false);
+  // 过短查询不触发。
+  assert.equal(shouldDualChannelPrefetch("奖学金"), false);
 });
 
 test("通用申请问题不会被误判为校园知识库问题", () => {

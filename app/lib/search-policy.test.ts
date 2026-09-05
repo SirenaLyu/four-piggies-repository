@@ -242,3 +242,19 @@ test("Agent 单工具达到预算后只关闭该工具", () => {
     ["find_files", "query_knowledge_base"],
   );
 });
+
+test("fetch_url 受独立预算控制且不影响其他工具", () => {
+  const tools = ["web_search", "fetch_url", "query_knowledge_base"];
+  assert.deepEqual(
+    activeToolNamesForStep(tools, 1, { webSearches: 0, urlFetches: 2 }),
+    ["web_search", "fetch_url", "query_knowledge_base"],
+  );
+  assert.deepEqual(
+    activeToolNamesForStep(tools, 1, { webSearches: 2, urlFetches: 0 }),
+    ["fetch_url", "query_knowledge_base"],
+  );
+  assert.deepEqual(
+    activeToolNamesForStep(tools, 1, { webSearches: 2, urlFetches: 3 }),
+    ["query_knowledge_base"],
+  );
+});
