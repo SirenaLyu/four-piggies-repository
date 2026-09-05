@@ -31,9 +31,19 @@ export function hasPendingApprovals(message: UIMessage): boolean {
   return getPendingApprovals(message).length > 0;
 }
 
-export function summarizeApproval(approval: PendingApproval): string {
+export function summarizeApproval(approval: PendingApproval, memories: Array<{ id: string; content: string }> = []): string {
   const input = approval.input as Record<string, unknown> | null;
   if (!input) return approval.toolName;
+  if (approval.toolName === "update_memory") {
+    const change = input.change as Record<string, unknown> | undefined;
+    if (!change) return "记忆变更";
+    if (change.action === "profile") return `更新基础记忆\n专业：${change.major}\n年级：${change.grade}`;
+    if (change.action === "add") return `新增记忆：${change.content}`;
+    const previous = memories.find((entry) => entry.id === change.id)?.content ?? `条目 ${change.id}`;
+    if (change.action === "update") return `修改记忆\n原内容：${previous}\n新内容：${change.content}`;
+    if (change.action === "delete") return `删除记忆：${previous}`;
+    return "跳过首次资料填写";
+  }
   if (approval.toolName === "execute_command") {
     const args = Array.isArray(input.args) ? input.args.map(String) : [];
     return `程序: ${String(input.executable ?? "")}\n参数: ${JSON.stringify(args)}` +

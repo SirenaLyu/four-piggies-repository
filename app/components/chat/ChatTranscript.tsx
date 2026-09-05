@@ -1,4 +1,5 @@
 "use client";
+import { SourceCards } from "./SourceCards";
 
 import type { UIMessage } from "ai";
 import type { RefObject } from "react";
@@ -24,6 +25,7 @@ type ChatTranscriptProps = {
   messages: UIMessage[];
   suggestions: Array<{ text: string; color: string }>;
   profileLabel: string | null;
+  memories: Array<{ id: string; content: string }>;
   exportsByMessage: Record<string, ExportFileDescriptor[]>;
   exportBusy: Set<string>;
   exportErrorsByMessage: Record<string, string>;
@@ -39,6 +41,7 @@ export function ChatTranscript({
   messages,
   suggestions,
   profileLabel,
+  memories,
   exportsByMessage,
   exportBusy,
   exportErrorsByMessage,
@@ -95,6 +98,7 @@ export function ChatTranscript({
         return (
           <div
             key={message.id}
+            data-chat-message={message.id}
             ref={(element) => {
               if (element) messageRefs.current.set(message.id, element);
               else messageRefs.current.delete(message.id);
@@ -159,13 +163,14 @@ export function ChatTranscript({
               )}
             </div>
 
+            {!fromUser && <SourceCards parts={message.parts} />}
             {!fromUser && pendingApprovals.length > 0 && (
               <div className="ml-10 mt-2 flex flex-col gap-2">
                 {pendingApprovals.map((approval) => (
                   <ToolApprovalCard
                     key={approval.approvalId || approval.toolCallId}
                     toolName={approval.toolName}
-                    summary={summarizeApproval(approval)}
+                    summary={summarizeApproval(approval, memories)}
                     onRespond={(approved) =>
                       onApprovalResponse(approval.approvalId, approved)
                     }

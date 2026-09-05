@@ -60,6 +60,13 @@ export function MarkdownRenderer({ content, variant = "assistant" }: MarkdownRen
           },
           // 链接新窗口打开
           a({ children, ...props }: ComponentPropsWithoutRef<"a">) {
+            if (/^#source-[a-z0-9]+$/.test(props.href ?? "")) {
+              return <a {...props} onClick={(event) => {
+                event.preventDefault();
+                const card = event.currentTarget.closest("[data-chat-message]")?.querySelector<HTMLDetailsElement>(`[data-source-anchor="${props.href!.slice(1)}"]`);
+                if (card) { card.open = true; card.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+              }}>{children}</a>;
+            }
             return (
               <a target="_blank" rel="noopener noreferrer" {...props}>
                 {children}

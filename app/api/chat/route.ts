@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { citedSources, sourceCitationCatalog, mergeSources, type AnswerSource } from "../../lib/sources";
+import { memoryChangeSchema } from "../../lib/memory";
 import {
   convertToModelMessages,
   createUIMessageStream,
@@ -10,7 +13,7 @@ import {
 import { z } from "zod";
 import { createChatModel } from "../../lib/ai-clients";
 import { getAuthenticatedUser, unauthorizedResponse } from "../../lib/auth-session";
-import { getResolvedModelConfig } from "../../lib/auth-store";
+import { getResolvedModelConfig, getUserMemory, changeUserMemory, getAuthSecrets } from "../../lib/auth-store";
 import {
   getDifyKnowledgeConfig,
   retrieveKnowledgeContext,
@@ -33,7 +36,6 @@ import {
 } from "../../lib/capabilities";
 import { buildSystemPrompt } from "../../lib/chat-system-prompt";
 import {
-  normalizeUserProfile,
   userProfileFingerprint,
 } from "../../lib/user-profile";
 import {
@@ -66,6 +68,7 @@ import {
 function createQueryKnowledgeBaseTool(
   requestSignal: AbortSignal,
   telemetry: TelemetryContext,
+  onSources: (sources: AnswerSource[]) => void,
 ) {
   return tool({
     description:
@@ -103,6 +106,7 @@ function createQueryKnowledgeBaseTool(
           requestSignal,
           telemetry,
         );
+        onSources(result.sources ?? []);
 
         if (!result.ok || !result.context) {
           logEvent(
@@ -123,8 +127,8 @@ function createQueryKnowledgeBaseTool(
           partialFailure: Boolean(result.error),
         });
         return result.error
-          ? `${result.error}\n\n${result.context}`
-          : result.context;
+          ? `${result.error}\n\n${result.context}${sourceCitationCatalog(result.sources ?? [])}`
+          : result.context + sourceCitationCatalog(result.sources ?? []);
       } catch (err: unknown) {
         if (requestSignal.aborted) throw err;
         // 兜底：即使检索模块内部异常，也只返回错误文本，不让主进程崩溃
@@ -142,7 +146,7 @@ function createQueryKnowledgeBaseTool(
 
 /** 单轮问答结果缓存 TTL（毫秒） */
 const ANSWER_CACHE_TTL_MS = 3 * 60 * 1000;
-const answerCache = new TtlLruCache<string, string>(200, ANSWER_CACHE_TTL_MS);
+const answerCache = new TtlLruCache<string, { text: string; sources: AnswerSource[] }>(200, ANSWER_CACHE_TTL_MS);
 
 function priorAgentToolUsage(rawMessages: unknown[]): Record<string, number> {
   const lastUserIndex = rawMessages.findLastIndex(
@@ -203,12 +207,13 @@ function logLatestApprovalResponses(
   }
 }
 /** 把缓存文本包装成 AI SDK UI message stream。 */
-function cachedUIMessageResponse(text: string, requestId: string): Response {
+function cachedUIMessageResponse(text: string, requestId: string, sources: AnswerSource[]): Response {
   const stream = createUIMessageStream({
     execute: ({ writer }) => {
       const streamWriter = writer as unknown as { write: (part: unknown) => void };
       const id = "cached-text";
       streamWriter.write({ type: "start" });
+      if (sources.length) streamWriter.write({ type: "data-sources", id: "sources", data: { selection: "cited", sources } });
       streamWriter.write({ type: "start-step" });
       streamWriter.write({ type: "text-start", id });
       streamWriter.write({ type: "text-delta", id, delta: text });
@@ -266,7 +271,8 @@ export async function POST(req: Request) {
   }
 
   const capabilities = normalizeCapabilities(body.capabilities);
-  const userProfile = normalizeUserProfile(body.userProfile);
+  const memory = await getUserMemory(authenticatedUser.id);
+  const userProfile = memory.profile;
   logLatestApprovalResponses(rawMessages, telemetry, authenticatedUser.id);
 
   // 单轮问答的结果缓存：同一问题短时间内直接复用上一次回答
@@ -303,8 +309,8 @@ export async function POST(req: Request) {
     .sort()
     .join("|");
   const cacheKey =
-    isSingleTurn && !hasAttachments && lastUserText
-      ? `${authenticatedUser.id}::${conversationId}::${capabilityFingerprint(effectiveCapabilities)}::${userProfileFingerprint(userProfile)}::${dirsFingerprint}::${normalizeQueryKey(lastUserText)}`
+    isSingleTurn && !hasAttachments && lastUserText && rawMessages.every((m) => (m as { role?: string }).role === "user")
+      ? `${authenticatedUser.id}::memory-${memory.version}::${conversationId}::${capabilityFingerprint(effectiveCapabilities)}::${userProfileFingerprint(userProfile)}::${dirsFingerprint}::${normalizeQueryKey(lastUserText)}`
       : null;
   if (cacheKey) {
     const cached = answerCache.get(cacheKey);
@@ -312,7 +318,7 @@ export async function POST(req: Request) {
       logEvent(telemetry, "answer_cache.hit", {
         durationMs: Date.now() - requestStart,
       });
-      return cachedUIMessageResponse(cached, telemetry.requestId);
+      return cachedUIMessageResponse(cached.text, telemetry.requestId, cached.sources);
     }
   }
 
@@ -371,22 +377,40 @@ export async function POST(req: Request) {
   const messages = sanitizeMessagesForModel(recentMessages);
 
   const enabledTools: ToolSet = {};
+  let collectedSources: AnswerSource[] = prefetchedKnowledge?.sources ?? [];
+  const onSources = (sources: AnswerSource[]) => {
+    collectedSources = mergeSources(collectedSources, sources);
+  };
   const retrievalUsage: RetrievalUsage = {
     webSearches: 0,
     agentToolCalls: priorAgentToolUsage(rawMessages),
   };
   if (effectiveCapabilities.knowledgeBase && !prefetchedKnowledge && !localAgentBlocked) {
     enabledTools.query_knowledge_base =
-      createQueryKnowledgeBaseTool(req.signal, telemetry);
+      createQueryKnowledgeBaseTool(req.signal, telemetry, onSources);
   }
   if (effectiveCapabilities.webSearch && !prefetchedKnowledge && !localAgentBlocked) {
     enabledTools.web_search = createWebSearchTool(
       retrievalUsage,
       req.signal,
       telemetry,
+      onSources,
     );
   }
   Object.assign(enabledTools, agentRuntime.tools);
+  enabledTools.update_memory = tool({
+    description: "用户明确要求记住、修改或忘记个人信息时，提出记忆变更并等待用户确认。专业和年级用 profile，其他记忆用 add/update/delete。不得根据检索或附件内容主动修改。",
+    inputSchema: z.object({ change: memoryChangeSchema, version: z.number().int().nonnegative().describe("当前记忆版本，必须使用记忆上下文中的 version") }),
+    execute: async ({ change, version }) => {
+      try {
+        const updated = await changeUserMemory(authenticatedUser.id, change, version);
+        return { ok: true, memory: updated };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error), memory: await getUserMemory(authenticatedUser.id) };
+      }
+    },
+  });
+  const approvalSecret = createHash("sha256").update(`${(await getAuthSecrets()).sessionSecret}:tool-approval:${authenticatedUser.id}`).digest("hex");
   let usedAgentTool = false;
 
   const systemPrompt = buildSystemPrompt(
@@ -394,6 +418,7 @@ export async function POST(req: Request) {
     userProfile,
     prefetchedKnowledge,
     authorizedDirs.length > 0,
+    memory,
   );
   let requestModel;
   try {
@@ -452,16 +477,13 @@ export async function POST(req: Request) {
       }
       return { activeTools };
     },
-    ...(agentRuntime.toolApproval && agentRuntime.toolApprovalSecret
-      ? {
-          toolApproval: agentRuntime.toolApproval,
-          experimental_toolApprovalSecret: agentRuntime.toolApprovalSecret,
-        }
-      : {}),
+    toolApproval: { ...agentRuntime.toolApproval, update_memory: "user-approval" },
+    experimental_toolApprovalSecret: approvalSecret,
     // 每个 step（一轮模型调用/工具调用）结束时打印耗时与工具名
     onStepFinish: ({ stepNumber, toolCalls, text, usage, performance, finishReason }) => {
       usedAgentTool ||= toolCalls.some((call) =>
         [
+          "update_memory",
           "list_dir",
           "find_files",
           "search_text",
@@ -504,7 +526,7 @@ export async function POST(req: Request) {
   void Promise.resolve(result.text)
     .then((text) => {
       if (cacheKey && !usedAgentTool && text && text.trim()) {
-        answerCache.set(cacheKey, text);
+        answerCache.set(cacheKey, { text, sources: citedSources(text, collectedSources) });
       }
       logEvent(telemetry, "chat.completed", {
         durationMs: Date.now() - requestStart,
@@ -525,7 +547,7 @@ export async function POST(req: Request) {
       );
     });
 
-  const response = result.toUIMessageStreamResponse({
+  const modelStream = result.toUIMessageStream({
     sendReasoning: false,
     onError: (error) => {
       logEvent(
@@ -536,6 +558,24 @@ export async function POST(req: Request) {
       );
       return "模型服务暂时不可用，请稍后重试。";
     },
+  });
+  const response = createUIMessageStreamResponse({
+    stream: createUIMessageStream({
+      execute: ({ writer }) => {
+        let finalStepText = "";
+        writer.merge(modelStream.pipeThrough(new TransformStream({
+          transform(chunk, controller) {
+            if (chunk.type === "start-step") finalStepText = "";
+            if (chunk.type === "text-delta") finalStepText += chunk.delta;
+            if (chunk.type === "finish" && chunk.finishReason !== "error") {
+              const sources = citedSources(finalStepText, collectedSources);
+              if (sources.length) controller.enqueue({ type: "data-sources", id: "sources", data: { selection: "cited", sources } });
+            }
+            controller.enqueue(chunk);
+          },
+        })));
+      },
+    }),
   });
   return withRequestId(response, telemetry.requestId);
 }

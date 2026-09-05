@@ -13,6 +13,8 @@ import {
 } from "node:crypto";
 import { promisify } from "node:util";
 
+import { emptyMemory, applyMemoryChange, type UserMemory, type MemoryChange } from "./memory.ts";
+
 const scrypt = promisify(scryptCallback);
 const STORE_VERSION = 1;
 
@@ -38,6 +40,7 @@ type StoredUser = {
   createdAt: number;
   modelConfig?: StoredModelConfig;
   agentGrants?: string[];
+  memory?: UserMemory;
 };
 
 type AuthStore = {
@@ -454,5 +457,20 @@ export async function clearUserModelConfig(userId: string): Promise<void> {
     const user = store.users.find((candidate) => candidate.id === userId);
     if (!user) throw new AuthStoreError("用户不存在", "user_not_found");
     delete user.modelConfig;
+  });
+}
+
+export async function getUserMemory(userId: string): Promise<UserMemory> {
+  const user = (await readStore()).users.find((item) => item.id === userId);
+  if (!user) throw new AuthStoreError("用户不存在", "user_not_found");
+  return user.memory ?? emptyMemory();
+}
+
+export async function changeUserMemory(userId: string, change: MemoryChange, expectedVersion: number): Promise<UserMemory> {
+  return mutateStore((store) => {
+    const user = store.users.find((item) => item.id === userId);
+    if (!user) throw new AuthStoreError("用户不存在", "user_not_found");
+    user.memory = applyMemoryChange(user.memory ?? emptyMemory(), change, expectedVersion, randomUUID());
+    return user.memory;
   });
 }

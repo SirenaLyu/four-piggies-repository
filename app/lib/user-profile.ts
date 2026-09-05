@@ -1,15 +1,13 @@
 export interface UserProfile {
-  age: number | null;
+  grade: string;
   major: string;
 }
 
 export const EMPTY_USER_PROFILE: UserProfile = {
-  age: null,
+  grade: "",
   major: "",
 };
 
-const MIN_AGE = 10;
-const MAX_AGE = 100;
 const MAX_MAJOR_LENGTH = 50;
 
 function normalizeMajor(value: unknown): string {
@@ -21,35 +19,22 @@ function normalizeMajor(value: unknown): string {
     .slice(0, MAX_MAJOR_LENGTH);
 }
 
-function normalizeAge(value: unknown): number | null {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim()
-        ? Number(value)
-        : Number.NaN;
-  if (!Number.isInteger(parsed) || parsed < MIN_AGE || parsed > MAX_AGE) {
-    return null;
-  }
-  return parsed;
-}
-
 /** 对浏览器保存或请求传入的资料做统一校验，避免把任意内容写入提示词。 */
 export function normalizeUserProfile(value: unknown): UserProfile {
   if (!value || typeof value !== "object") return { ...EMPTY_USER_PROFILE };
   const raw = value as Record<string, unknown>;
   return {
-    age: normalizeAge(raw.age),
+    grade: normalizeMajor(raw.grade).slice(0, 30),
     major: normalizeMajor(raw.major),
   };
 }
 
 export function isCompleteUserProfile(profile: UserProfile): boolean {
-  return profile.age !== null && profile.major.length > 0;
+  return profile.grade.length > 0 && profile.major.length > 0;
 }
 
 export function userProfileFingerprint(profile: UserProfile): string {
-  return `${profile.age ?? "na"}:${profile.major.toLocaleLowerCase("zh-CN") || "none"}`;
+  return `${profile.grade || "none"}:${profile.major.toLocaleLowerCase("zh-CN") || "none"}`;
 }
 
 type SuggestedQuestion = {
@@ -80,10 +65,10 @@ function majorSpecificQuestion(major: string): string {
   return `${label}应该怎样规划课程和发展方向？`;
 }
 
-function ageSpecificQuestion(age: number): string {
-  if (age <= 17) return "入学前应该如何适应大学的学习节奏？";
-  if (age <= 22) return "现阶段怎样平衡课程、科研和校园生活？";
-  return "现阶段怎样平衡科研、实习与职业规划？";
+function gradeSpecificQuestion(grade: string): string {
+  if (/大一|本科一年级/.test(grade)) return "如何适应大学学习并安排基础课程？";
+  if (/研|博/.test(grade)) return "现阶段怎样平衡科研、论文与职业规划？";
+  return "现阶段怎样平衡课程、科研和校园生活？";
 }
 
 export function buildPersonalizedSuggestions(
@@ -96,8 +81,8 @@ export function buildPersonalizedSuggestions(
   } else {
     suggestions.push({ text: "课程怎么选？", color: "#e8f0fb" });
   }
-  if (profile.age !== null) {
-    suggestions.push({ text: ageSpecificQuestion(profile.age), color: "#f0edfb" });
+  if (profile.grade.length > 0) {
+    suggestions.push({ text: gradeSpecificQuestion(profile.grade), color: "#f0edfb" });
   } else {
     suggestions.push({ text: "如何规划大学阶段的学习？", color: "#f0edfb" });
   }

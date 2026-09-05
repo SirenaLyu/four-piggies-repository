@@ -1,4 +1,5 @@
 import { tool } from "ai";
+import { sourceCitationCatalog, webSourcesFromText, type AnswerSource } from "./sources.ts";
 import { z } from "zod";
 import { withTimeoutSignal } from "./abort-signals.ts";
 import { createCircuitBreaker } from "./circuit-breaker.ts";
@@ -30,6 +31,7 @@ export function createWebSearchTool(
   usage: RetrievalUsage,
   requestSignal: AbortSignal,
   telemetry: TelemetryContext = { requestId: "background", scope: "web_search" },
+  onSources?: (sources: AnswerSource[]) => void,
 ) {
   return tool({
     description:
@@ -68,10 +70,11 @@ export function createWebSearchTool(
       });
       const cachedResult = webSearchCache.get(searchCacheKey);
       if (cachedResult) {
+        onSources?.(webSourcesFromText(cachedResult));
         logEvent(telemetry, "web_search.cache_hit", {
           queryChars: normalizedQuery.length,
         });
-        return `【联网搜索结果（缓存，已做内容安全与来源筛选）】\n${cachedResult}`;
+        return `【联网搜索结果（缓存，已做内容安全与来源筛选）】\n${cachedResult}${sourceCitationCatalog(webSourcesFromText(cachedResult))}`;
       }
 
       const startedAt = Date.now();
@@ -187,6 +190,7 @@ export function createWebSearchTool(
           blockedDomains,
         });
         if (isReliableSearchResult(safeResult)) webSearchCache.set(searchCacheKey, safeResult);
+        onSources?.(webSourcesFromText(safeResult));
         logEvent(telemetry, "web_search.completed", {
           durationMs: Date.now() - startedAt,
           workflowChars: workflowResults.reduce(
@@ -197,7 +201,7 @@ export function createWebSearchTool(
           safeChars: safeResult.length,
           attempts: workflowResults.length,
         });
-        return `【联网搜索结果（已做内容安全与来源筛选）】\n${safeResult}`;
+        return `【联网搜索结果（已做内容安全与来源筛选）】\n${safeResult}${sourceCitationCatalog(webSourcesFromText(safeResult))}`;
       }
       if (lastWorkflowError) {
         logEvent(

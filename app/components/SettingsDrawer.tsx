@@ -1,3 +1,5 @@
+import { MemoryPanel } from "./MemoryPanel";
+import type { MemoryChange, UserMemory } from "../lib/memory";
 import type { AssistantCapabilities } from "../lib/capabilities";
 import type { SignedInUser } from "./AuthGate";
 import { ModelConfigPanel } from "./ModelConfigPanel";
@@ -34,7 +36,7 @@ const CAPABILITY_OPTIONS: Array<{
 type AppearanceMode = "auto" | "light" | "dark";
 
 export type UserProfileDraft = {
-  age: string;
+  grade: string;
   major: string;
 };
 
@@ -45,12 +47,17 @@ export type SettingsDrawerProps = {
   capabilities: AssistantCapabilities;
   profileDraft: UserProfileDraft;
   profileError: string;
+  memory: UserMemory;
+  memoryBusy: boolean;
+  onMemoryChange: (change: MemoryChange) => Promise<boolean>;
+  skipIntro: boolean;
   darkMode: AppearanceMode;
   themeColor: string;
   onClose: () => void;
   onCapabilitiesChange: (capabilities: AssistantCapabilities) => void;
   onProfileDraftChange: (draft: UserProfileDraft) => void;
-  onSaveProfile: () => boolean;
+  onSaveProfile: () => Promise<boolean>;
+  onSkipIntroChange: (skip: boolean) => void;
   onDarkModeChange: (mode: AppearanceMode) => void;
   onThemeColorChange: (color: string) => void;
 };
@@ -62,12 +69,17 @@ export function SettingsDrawer({
   capabilities,
   profileDraft,
   profileError,
+  memory,
+  memoryBusy,
+  onMemoryChange,
+  skipIntro,
   darkMode,
   themeColor,
   onClose,
   onCapabilitiesChange,
   onProfileDraftChange,
   onSaveProfile,
+  onSkipIntroChange,
   onDarkModeChange,
   onThemeColorChange,
 }: SettingsDrawerProps) {
@@ -97,23 +109,21 @@ export function SettingsDrawer({
             }}
           >
             <label className="mb-2 block text-xs font-medium text-foreground/70">
-              个人资料
+              基础记忆
             </label>
             <div className="grid grid-cols-[92px_1fr] gap-2">
               <input
-                type="number"
-                min={10}
-                max={100}
-                inputMode="numeric"
-                value={profileDraft.age}
+                type="text"
+                maxLength={30}
+                value={profileDraft.grade}
                 onChange={(event) =>
                   onProfileDraftChange({
                     ...profileDraft,
-                    age: event.target.value,
+                    grade: event.target.value,
                   })
                 }
-                placeholder="年龄"
-                aria-label="年龄"
+                placeholder="如大二"
+                aria-label="年级"
                 className="rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none focus:border-primary-400"
               />
               <input
@@ -136,16 +146,18 @@ export function SettingsDrawer({
             )}
             <div className="mt-2 flex items-center justify-between gap-3">
               <p className="text-[11px] leading-4 text-foreground/40">
-                保存在当前浏览器，提问时用于定制回答。
+                按账号保存；清空字段并保存即可移除。
               </p>
               <button
                 type="submit"
+                disabled={memoryBusy}
                 className="shrink-0 rounded-md bg-primary-600 px-3 py-1.5 text-xs text-white hover:bg-primary-500"
               >
                 保存
               </button>
             </div>
           </form>
+          <MemoryPanel memory={memory} busy={memoryBusy} onChange={onMemoryChange} />
           <div>
             <label className="mb-2 block text-xs font-medium text-foreground/70">
               AI 能力边界
@@ -186,6 +198,23 @@ export function SettingsDrawer({
             <p className="mt-2 text-[11px] leading-4 text-foreground/40">
               关闭的能力不会发送给模型，也不会在服务端注册对应工具。
               {controlsDisabled ? " 请等待当前操作结束后再修改。" : ""}
+            </p>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-foreground/70 mb-2 block">
+              开场动画
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={skipIntro}
+                onChange={(event) => onSkipIntroChange(event.target.checked)}
+                className="w-4 h-4 rounded border-border accent-primary-600"
+              />
+              <span className="text-sm text-foreground/80">跳过开场动画</span>
+            </label>
+            <p className="text-[11px] text-foreground/40 mt-1 ml-7">
+              开启后下次启动将直接进入主界面
             </p>
           </div>
           <div>

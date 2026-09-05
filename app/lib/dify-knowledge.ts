@@ -1,6 +1,7 @@
 // ============================================================================
 
 import { TtlLruCache } from "./ttl-lru-cache.ts";
+import { linksInSource, safeSourceUrl, sourceTextId, type AnswerSource } from "./sources.ts";
 import { withTimeoutSignal } from "./abort-signals.ts";
 import {
   errorMessage,
@@ -212,6 +213,10 @@ export interface KnowledgeChunk {
   content: string;
   /** 相似度分数（越高越相关） */
   score: number;
+  documentTitle?: string;
+  documentId?: string;
+  segmentId?: string;
+  sourceUrl?: string;
 }
 
 /** 检索结果：context 可直接作为工具返回值交给大模型 */
@@ -224,6 +229,7 @@ export interface KnowledgeRetrievalResult {
   chunkCount: number;
   /** 失败或部分失败时的提示信息 */
   error?: string;
+  sources?: AnswerSource[];
 }
 
 /** 读取 Dify 知识库相关环境变量配置 */
@@ -352,7 +358,14 @@ export function extractRecord(
       : typeof segment.score === "number"
         ? segment.score
         : 0;
-  return { datasetId, content, score };
+  const chunk: KnowledgeChunk = { datasetId, content, score };
+  const document = (segment.document ?? raw.document) as Record<string, unknown> | undefined;
+  if (typeof document?.name === "string") chunk.documentTitle = document.name.slice(0, 160);
+  if (typeof document?.id === "string") chunk.documentId = document.id;
+  if (typeof segment.id === "string") chunk.segmentId = segment.id;
+  const sourceUrl = safeSourceUrl(document?.url);
+  if (sourceUrl) chunk.sourceUrl = sourceUrl;
+  return chunk;
 }
 
 /** 兼容 Dify 的 records 与 data.records 两种响应包裹。 */
@@ -736,6 +749,15 @@ export async function retrieveKnowledgeContext(
     ok: true,
     context,
     chunkCount: uniqueChunks.length,
+    sources: uniqueChunks.map((chunk, index) => ({
+      id: `knowledge:${chunk.datasetId}:${chunk.documentId ?? "document"}:${chunk.segmentId ?? sourceTextId(chunk.content)}`,
+      kind: "knowledge",
+      title: chunk.documentTitle || `${datasetLabel(chunk.datasetId)} · 片段 ${index + 1}`,
+      dataset: datasetLabel(chunk.datasetId),
+      excerpt: chunk.content.slice(0, 2500),
+      url: chunk.sourceUrl,
+      links: linksInSource(chunk.content),
+    })),
     error,
   };
   logEvent(telemetry, "knowledge.context_ready", {

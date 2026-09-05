@@ -38,6 +38,8 @@ export function sanitizeMessagesForModel(
     const safeParts: Array<Record<string, unknown>> = [];
     const unsupportedFiles: string[] = [];
     for (const part of message.parts) {
+      // Source cards are server-produced UI evidence, not client-provided model context.
+      if (part.type === "data-sources") continue;
       if (part.type === "text") {
         safeParts.push({ ...part });
         continue;

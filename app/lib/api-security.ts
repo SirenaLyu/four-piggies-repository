@@ -16,7 +16,7 @@ export type ApiSecurityOptions = {
     | "summarize"
     | "auth"
     | "modelConfig"
-    | "agentDirectory";
+    | "agentDirectory" | "memory";
   defaultLimit: number;
   windowMs?: number;
 };

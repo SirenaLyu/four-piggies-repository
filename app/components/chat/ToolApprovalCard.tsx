@@ -25,7 +25,9 @@ export function ToolApprovalCard({
   return (
     <div className="mt-2 w-full max-w-md rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
       <div className="mb-1 text-xs font-semibold text-amber-800">
-        {toolName === "execute_command"
+        {toolName === "update_memory"
+          ? "🧠 记忆变更确认"
+          : toolName === "execute_command"
           ? "⚠️ 执行命令确认"
           : toolName === "read_file" || toolName === "search_text"
             ? "🔐 发送本地内容确认"

@@ -36,7 +36,7 @@ test("多字段问题要求逐项覆盖且不得静默遗漏", () => {
 test("用户资料和预取知识被安全地写入提示词", () => {
   const prompt = buildSystemPrompt(
     { knowledgeBase: true, webSearch: true, agent: false },
-    { age: 20, major: "计算机科学" },
+    { grade: "大二", major: "计算机科学" },
     { ok: true, context: "食堂资料", chunkCount: 1 },
   );
   assert.match(prompt, /计算机科学/);

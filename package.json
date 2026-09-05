@@ -9,6 +9,8 @@
     "lint": "eslint",
     "test": "node --test --no-warnings",
     "check": "npm test && npm run lint && npx tsc --noEmit && npm run eval:retrieval && npm run eval:e2e",
+    "test:memory": "node scripts/smoke-memory.mjs",
+    "test:sources": "node scripts/smoke-sources.mjs",
     "test:smoke": "node --no-warnings scripts/smoke-production.mjs",
     "eval:retrieval": "node --no-warnings scripts/eval-retrieval.mjs",
     "eval:retrieval:live": "node --no-warnings scripts/eval-retrieval.mjs --live",

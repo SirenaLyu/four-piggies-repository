@@ -9,17 +9,20 @@
 1. `query_knowledge_base` —— 查询 Dify 知识库（学校政策、办事流程、人员信息、办公地点等文档）。
 2. `web_search` —— 通过 Dify 联网搜索工作流检索实时公开信息。
 3. Agent 文件工具 —— 在服务端允许且用户授权的目录内列出、读取、写入文件或执行白名单程序。
+4. `update_memory` —— 根据用户要求提出账号记忆变更，用户在界面确认后保存；此工具独立于上述三项能力开关。
 
 ## 2. 功能特性
 
-- **新拟态落地页**：以科大蓝和橙色为点缀，提供校园问答与常用功能入口。
+- **落地页与开场动画**：新拟态（neumorphism）风格落地页与可跳过的开场动画。
 - **流式对话**：基于 AI SDK `streamText` 的流式输出，首字即回。
-- **本地多用户登录**：用户名和密码经 scrypt 哈希后保存在服务端；会话使用签名的 HttpOnly Cookie。
+- **本地多用户登录**：账号保存在服务端，密码使用随机盐和 scrypt 哈希；会话使用签名的 HttpOnly Cookie。
+- **账号记忆**：首次填写专业和年级（不再收集年龄），可跳过；基础资料和最多 50 条自定义记忆保存于服务端账号数据。设置中支持增删改，也可通过对话提出变更、确认后保存。每条记忆最多 500 字，版本校验避免并发覆盖；对话读取服务端记忆，旧浏览器资料仅预填专业。记忆会作为上下文发送给当前配置的模型。
 - **个人模型配置**：每位用户可填写自己的 OpenAI 兼容 API URL、Key、主模型和备用模型；Key 采用 AES-256-GCM 加密保存且不回传浏览器。
-- **多轮工具调用**：模型按问题时效选择知识库或联网工具，最多 3 步（`stopWhen: stepCountIs(3)`）。
-- **能力边界开关**：三项能力可任意组合或全部关闭；关闭的工具不会在服务端注册。
-- **受控 Agent**：目录须同时通过客户端授权与服务端根目录校验，写入和命令执行须逐次批准。
-- **知识库检索**：并发检索 8 个 Dify 数据集，去重排序后作为上下文。
+- **多轮工具调用**：普通问答每次请求最多 4 步，Agent 只读任务最多 6 步、修改或执行任务最多 8 步，包含最后的无工具回答步骤。
+- **能力边界开关**：知识库、联网和 Agent 三项能力可任意组合或全部关闭；关闭的对应工具不会在服务端注册。账号记忆仍可读取和管理。
+- **受控 Agent**：目录授权按账号保存在服务端，并受管理员根目录约束；读取默认需要批准，写入和命令执行须逐次批准。
+- **知识库检索**：内置 8 个 Dify 数据集的主题路由，只并发检索问题相关的库，按库内排名轮转选取并去重。
+- **可核验来源卡片**：回答完成后仅展示最终回答明确引用的资料，区分知识库和网页。点击卡片展开文档名、检索片段或搜索摘要，并打开原网页或片段内链接。没有原文 URL 的知识库资料展示片段，不生成管理后台链接。通过检索来源编号与最终回答引用精确匹配，未引用的检索结果不展示；正文引用可点击展开对应卡片。旧历史中未标记采用情况的来源不展示。来源随历史保存，回答缓存命中时也会恢复。
 - **联网搜索**：通过 Dify/SearXNG 检索实时公开信息，执行日期规范化、主题相关度排序、可信来源优先、域名去重和风险内容过滤。
 - **历史会话**：会话列表与消息保存在浏览器 `localStorage`；附件只保留文件名等元信息，不保存 Base64 正文。
 - **按需导出**：用户点击后才生成 Markdown / Word / PDF / 文本 / 代码文件；中文 PDF 使用浏览器本地字体绘制，避免默认字体缺字。
@@ -37,6 +40,20 @@
 | 内容渲染 | `react-markdown` + `remark-gfm` |
 | 导出 | `docx`、`jspdf` |
 
+应用采用单个 Next.js 服务承载页面与 API。浏览器通过 `useChat` 接收流式消息，`/api/chat` 负责认证、记忆读取、知识预取、模型选择和工具执行。
+
+```mermaid
+flowchart TD
+    UI[浏览器聊天界面] --> API[Next.js API]
+    UI <--> Local[localStorage：会话与偏好]
+    API <--> Accounts[服务端账号存储：认证、模型配置、记忆、目录授权]
+    API --> Chat[聊天编排]
+    Chat --> Model[OpenAI 兼容模型]
+    Chat --> Dify[Dify 知识库与联网工作流]
+    Chat --> Agent[授权目录内的文件与命令工具]
+    Scripts[独立采集与同步脚本] --> Dify
+```
+
 ## 4. 目录结构
 
 ```text
@@ -44,11 +61,20 @@ four-piggies-repository/
 ├── app/
 │   ├── api/
 │   │   ├── chat/route.ts          # 核心对话接口（流式 + 工具调用）
+│   │   ├── auth/                  # 注册、登录、退出和会话检查
+│   │   ├── memory/route.ts        # 当前账号记忆读取与修改
+│   │   ├── model-config/route.ts  # 个人模型配置
+│   │   ├── agent/directories/    # 服务端目录授权
 │   │   ├── summarize/route.ts     # 会话标题自动总结
 │   │   └── export/route.ts        # 回答导出文件生成
-│   ├── components/                # 落地页、设置、Logo 及拆分后的聊天界面组件
+│   ├── components/                # 落地页、设置及拆分后的聊天界面组件
 │   ├── lib/
 │   │   ├── ai-clients.ts          # OpenAI 兼容客户端与模型名
+│   │   ├── auth-store.ts          # 账号、加密模型配置和记忆持久化
+│   │   ├── auth-session.ts        # 签名会话与 Cookie
+│   │   ├── memory.ts              # 记忆结构、校验与版本冲突处理
+│   │   ├── user-profile.ts        # 专业、年级规范化和推荐问题
+│   │   ├── tools/                # Agent 意图、权限、文件与命令执行
 │   │   ├── chat-messages.ts        # 消息与附件规范化
 │   │   ├── chat-system-prompt.ts   # 按能力构建系统提示词
 │   │   ├── conversation-storage.ts # 容量安全的本地会话持久化
@@ -65,7 +91,13 @@ four-piggies-repository/
 ├── scripts/
 │   ├── build-wokepaike-knowledge.mjs # 生成课程/培养方案/评课检索文档
 │   ├── sync-wokepaike-dify.mjs       # Dify 增量同步、原位刷新和索引等待
-│   └── sync-ustc-faculty-dify.mjs    # 科大官网教师资料采集、分片和安全同步
+│   ├── sync-ustc-faculty-dify.mjs    # 科大官网教师资料采集、分片和安全同步
+│   ├── sync-ustc-library-dify.mjs    # 图书馆规则同步
+│   └── smoke-memory.mjs             # 使用模拟模型的记忆生产冒烟测试
+├── data/auth/                     # 本地账号、记忆与密钥（不提交）
+├── generated/                     # 采集缓存、知识文档、同步快照与评测结果（不提交）
+├── .next/                         # 构建产物与开发缓存（不提交）
+├── node_modules/                  # 安装的依赖（不提交）
 ├── .env.local                     # 本地环境变量（已 gitignore）
 ├── package.json
 └── start.bat                      # Windows 一键启动
@@ -84,15 +116,15 @@ four-piggies-repository/
 | `CHAT_FALLBACK_MODEL` | 可选备用模型；与主模型不同时才启用网络/超时降级 |
 | `AUTH_ALLOW_REGISTRATION` | 是否允许首位用户之后继续自助注册；默认 false |
 | `AUTH_SESSION_SECRET` / `AUTH_ENCRYPTION_KEY` | 会话签名与个人 API Key 加密密钥；生产或多实例部署必须固定配置 |
-| `AUTH_DATA_DIR` | 用户与加密模型配置目录，默认 `data/auth` |
+| `AUTH_DATA_DIR` | 账号、加密模型配置、记忆和目录授权的存储目录，默认 `data/auth` |
 | `AUTH_COOKIE_SECURE` | 可选覆盖 Cookie 的 HTTPS 判断；HTTPS 部署建议设 true |
 | `MODEL_BASE_URL_ALLOWLIST` | 允许使用的内网或 HTTP 模型 API Origin；默认个人 URL 只能是公网 HTTPS |
 | `APP_ALLOWED_ORIGINS` | 反向代理或跨域前端可信来源；同源访问无需配置 |
 | `TRUST_PROXY_HEADERS` | 仅在可信代理会覆盖 `X-Forwarded-*` 时设为 true；默认忽略客户端可伪造的代理头 |
-| `API_RATE_LIMIT_*` | chat/export/summarize 的固定窗口限流配置 |
+| `API_RATE_LIMIT_*` | 各接口的固定窗口限流配置；记忆接口使用 `API_RATE_LIMIT_MEMORY` |
 | `DIFY_BASE_URL` | 自建 Dify 服务地址（结尾不带 `/v1`） |
 | `DIFY_KNOWLEDGE_API_KEY` | Dify 知识库 Dataset Key（`dataset-` 开头） |
-| `DATASET_IDS` | 8 个知识库数据集 ID，逗号分隔 |
+| `DATASET_IDS` | 要启用的知识库数据集 ID，逗号分隔；内置路由覆盖 8 个数据集 |
 | `DIFY_DATASET_ROUTE_MAP` | 可选的数据集主题路由 JSON；使用项目内置 8 个数据集 ID 时可不配置 |
 | `DIFY_RETRIEVAL_TOP_K` | 每个知识库候选数，默认 5 |
 | `DIFY_RETRIEVAL_SEARCH_METHOD` | 可选强制检索方式；默认按查询动态选择 semantic 或 hybrid |
@@ -112,7 +144,7 @@ four-piggies-repository/
 | `AGENT_ALLOWED_COMMANDS` | 旧版程序白名单；现在只允许无参数或版本/帮助查询 |
 | `AGENT_COMMAND_ENV_ALLOWLIST` | 允许额外传给子进程的环境变量名；默认不会传递应用密钥 |
 | `AGENT_MAX_CONCURRENT_COMMANDS_PER_USER` | 单个用户的并发命令上限，默认 1，最大 4 |
-| `TOOL_APPROVAL_SECRET` | 可选工具审批签名密钥；不设时从持久化认证密钥派生 |
+| `TOOL_APPROVAL_SECRET` | Agent runtime 保留的配置项；当前聊天入口统一从会话密钥和用户 ID 派生审批签名密钥 |
 | `TAVILY_API_KEY` | 已弃用（联网搜索改为走 Dify），可留可删 |
 | `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` | 硅基流动，本分支当前未实际使用 |
 
@@ -134,6 +166,8 @@ Windows 用户**直接双击 `start.bat`** 即可，脚本会自动完成以下�
 
 ### 6.2 手动启动
 
+建议使用 Node.js 24（本地验证版本），以运行直接加载 TypeScript 的测试脚本。以下命令均在实际 Git 工作区执行；本机为 `main/.codex-github-sync`。
+
 ```bash
 # 1. 安装依赖（首次）
 npm install
@@ -145,6 +179,10 @@ npm run dev
 ```
 
 访问 <http://localhost:3000>。
+
+生产模式按顺序执行 `npm run build`、`npm start`。构建会更新 `.next`，不要同时执行构建和生产冒烟测试。
+
+首次进入时创建账号，再填写专业和年级，例如“计算机科学、大二”，也可选择“稍后填写”。设置中的“基础记忆”和“我的记忆”支持后续修改；聊天、标题和导出需要有效的个人或服务器默认模型配置。
 
 ### 6.3 同步蜗壳排课数据到 Dify
 
@@ -223,13 +261,14 @@ npm run sync:ustc-library -- --upload
 
 `app/api/chat/route.ts` 使用 `streamText`：
 
-- 模型：`chatClient.chat(CHAT_MODEL)`（OpenAI 兼容接口，默认 `deepseek-v4-flash`）。
+- 模型：`createChatModel(await getResolvedModelConfig(user.id))`，优先个人配置，服务器默认模型为 `deepseek-v4-flash`。
 - 工具：根据客户端能力开关和当前问题意图动态注册知识库、联网搜索和 Agent 文件工具；长期打开 Agent 不会拖慢普通校园问答。
 - 快速路径：主题明确且非实时的单轮校园问题会先检索知识库，并直接进入回答阶段，省去一次模型工具选择往返；最新通知、天气等实时问题仍走原有工具流程。
 - 长对话只向模型发送最近 24 条消息（可配置），减少提示词体积；本地完整会话不受影响。
 - 步数上限：普通问答最多 4 步；Agent 只读任务最多 6 步，修改/执行任务最多 8 步；每种工具另有独立调用预算，最后一步统一关闭工具并生成最终答案。
 - 输出：AI SDK UI message stream，可携带文本、工具调用和审批请求。
-- 安全边界：能力开关由服务端再次解析；关闭的工具不进入 `streamText`。
+- 安全边界：能力开关由服务端再次解析；关闭的检索或 Agent 工具不进入 `streamText`。`update_memory` 独立注册，所有变更都需要签名审批。
+- 记忆上下文以服务端账号记录为准，不采用浏览器自报资料。回答缓存包含记忆版本，修改后不会复用旧版本的回答；调用记忆变更工具的结果不进入回答缓存。
 
 ### 7.2 知识库检索
 
@@ -248,6 +287,18 @@ npm run sync:ustc-library -- --upload
 - 使用最多 200 项的 TTL/LRU 缓存；失败和空结果不缓存。
 
 ### 7.3 检索评测
+
+本地完整检查和生产冒烟按顺序执行：
+
+```bash
+npm run check
+npm run build
+npm run test:smoke
+npm run test:memory
+npm run test:sources
+```
+
+`check` 包含单元测试、ESLint、TypeScript、检索路由与校园语料离线回归。`test:memory` 使用临时账号存储和本地模拟模型，验证记忆增删改、跨账号隔离、版本冲突、对话审批/拒绝及后续上下文读取，不调用真实模型。它验证工具执行链路，真实模型对自然语言意图的识别效果需要单独实测。
 
 ```bash
 # 离线路由回归，不需要 API Key
@@ -287,6 +338,8 @@ npm run test:smoke
 校验；Dify 召回和最终回答只在有凭据的受控环境运行，避免把账号或密钥写入仓库。
 排查生成失败时可额外传入 `--include-answer-text`，将模型答案写进本次报告；该开关默认关闭，含真实用户内容的评测不得启用或提交报告。
 
+来源卡片专项验证使用 `npm run test:sources`，在本地模拟模型与 Dify 服务，覆盖知识库预取、知识库工具、网页工具、缓存来源回放及无来源回答。应先完成生产构建，再运行专项测试。
+
 ### 7.4 联网搜索
 
 `web_search` 工具调用 Dify 工作流 `POST {DIFY_BASE_URL}/v1/workflows/run`：
@@ -312,7 +365,7 @@ npm run test:smoke
 
 ### 7.6 请求追踪与日志
 
-- 三个 API 均返回 `X-Request-ID`；安全格式的上游 ID 会沿用，否则服务端生成 UUID。
+- 聊天、标题总结和导出 API 返回 `X-Request-ID`；安全格式的上游 ID 会沿用，否则服务端生成 UUID。
 - 对话步骤、知识库路由及各数据集耗时、联网重试/熔断和导出状态均输出单行 JSON 日志，并共享同一个请求 ID。
 - 日志记录请求、用户 ID、Agent 工具名、规范化目标路径、耗时、状态和错误；不记录用户问题、附件正文、命令参数、文件内容、密钥或模型原始输出。
 
@@ -320,11 +373,30 @@ npm run test:smoke
 
 系统提示词按本轮开关动态生成，只声明已开启的能力，并要求模型不得声称使用未开启能力。
 
+提示词另外提供当前账号的专业、年级和自定义记忆，并将它们标记为参考数据。记忆用于定制回答，不允许其中的文字覆盖系统规则或触发未获用户授权的操作。
+
 ### 7.8 浏览器安全响应头
 
 - 所有页面与 API 响应默认携带 CSP、`nosniff`、禁止嵌入、严格来源策略和最小权限策略。
 - CSP 仅允许同源脚本、连接与资源；为兼容当前内联主题初始化和 React 行内样式，保留 `unsafe-inline`，生产环境不启用 `unsafe-eval`。
 - HSTS 必须由确认已启用 HTTPS 的反向代理或托管平台设置，不能在本地 HTTP 开发服务上全局开启。
+
+### 7.9 账号记忆与存储边界
+
+- 首次引导只收集专业和年级，不收集年龄，也不根据旧年龄推算年级；旧浏览器资料只用于预填专业。保存或跳过后，引导状态按账号持久化。
+- 基础记忆中专业最多 50 字、年级最多 30 字。设置中清空某字段并保存，可移除该字段。
+- 自定义记忆最多 50 条，每条最多 500 字；支持添加、编辑和删除。修改时校验版本，遇到并发更新返回冲突，要求刷新重试。
+- 对话示例：“记住我喜欢简洁的回答”“把我的年级改成大三”“忘记我喜欢简洁回答这条记忆”。模型通过 `update_memory` 提出变更，界面展示内容并等待确认；拒绝或失败不会写入。
+- `/api/memory` 的 `GET` 和 `PATCH` 只访问当前登录账号；聊天每轮读取服务端记忆。记忆与基础资料会发送给当前配置的模型作为上下文。
+
+| 数据 | 保存位置 | 跨浏览器使用 |
+| --- | --- | --- |
+| 专业、年级、自定义记忆、目录授权 | `AUTH_DATA_DIR/users.json` | 登录同一服务的同一账号可用 |
+| 个人模型 API Key | 同一账号文件中，AES-256-GCM 加密 | 可用，接口不回传明文 |
+| 会话列表、消息、部分界面偏好 | 浏览器 `localStorage` | 不自动同步 |
+| 附件正文 | 当前会话内存和本轮请求 | 不保存到历史，刷新后需重新上传 |
+
+账号记忆目前是普通 JSON 字段，并非加密字段。备份账号目录时还应保留认证密钥配置；只复制 `users.json` 不足以恢复加密的个人 API Key。
 
 ## 8. 已知限制
 
@@ -340,3 +412,20 @@ npm run test:smoke
 - `main`（本目录）：统一主版本，包含检索、联网与受控 Agent 三项可选能力。
 - `知识库构建`：检索升级分支（分类器 + Supabase 结构化数据 + 爬虫建库 + eval），该方案中的 Supabase / Tavily / 爬虫已被视为弃用。
 - `agent`：保留为合并前的兼容快照；后续开发与启动请使用 `main`。
+
+## 10. 目录占用与清理
+
+以下是 2026-09-05 本机实际 Git 工作区的文件逻辑大小快照，随依赖安装、构建和数据同步变化，不代表浏览器下载量或磁盘实际分配空间。
+
+| 目录 | 约占用 | 用途与清理影响 |
+| --- | ---: | --- |
+| `node_modules` | 499 MB | 依赖；删除后需重新安装才能开发或运行 |
+| `.next` | 471 MB | 构建和开发缓存；停止相关服务后可清理，下次开发或构建会重新生成，生产启动前需重新构建 |
+| `generated` | 78 MB | 采集结果、同步状态与回滚快照；清理前保留仍需使用的续传和回滚数据 |
+| `.git` | 2.2 MB | 版本历史，正常保留 |
+| `public` | 1.1 MB | 页面静态资源，正常保留 |
+| `app` | 0.4 MB | 业务源码，正常保留 |
+
+依赖中主要是 Next.js（约 176 MB）与 `@next` 原生编译组件（约 102 MB）。`.next` 中开发产物约 230 MB、构建缓存约 210 MB；`generated` 中教师资料约 66 MB、课程资料约 10 MB。
+
+本机外层 `main` 还保留历史目录。重解析点属性本身不能证明两个路径指向同一份数据，不能据此直接合并占用统计或删除所谓“重复目录”；应分别核实路径、启动入口和磁盘实际占用。备份与发布源码时按 Git 跟踪文件范围处理，另行备份账号数据、密钥配置以及需要保留的同步快照。

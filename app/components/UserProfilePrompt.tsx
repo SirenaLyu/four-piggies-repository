@@ -3,15 +3,17 @@ import type { UserProfileDraft } from "./SettingsDrawer";
 
 type UserProfilePromptProps = {
   open: boolean;
+  busy: boolean;
   draft: UserProfileDraft;
   error: string;
   onDraftChange: (draft: UserProfileDraft) => void;
-  onSave: () => boolean;
+  onSave: () => Promise<boolean>;
   onDismiss: () => void;
 };
 
 export function UserProfilePrompt({
   open,
+  busy,
   draft,
   error,
   onDraftChange,
@@ -46,26 +48,24 @@ export function UserProfilePrompt({
               先认识一下你
             </h2>
             <p className="mt-1 text-sm leading-5 text-foreground/55">
-              填写年龄和专业后，我会为你调整问题推荐、讲解深度和校园建议。
+              填写专业和年级，建立你的第一份记忆。之后，我会为你调整问题推荐、讲解深度和校园建议。
             </p>
           </div>
         </div>
         <div className="space-y-3">
           <label className="block">
             <span className="mb-1.5 block text-xs font-medium text-foreground/70">
-              年龄
+              年级
             </span>
             <input
               autoFocus
-              type="number"
-              min={10}
-              max={100}
-              inputMode="numeric"
-              value={draft.age}
+              type="text"
+              maxLength={30}
+              value={draft.grade}
               onChange={(event) =>
-                onDraftChange({ ...draft, age: event.target.value })
+                onDraftChange({ ...draft, grade: event.target.value })
               }
-              placeholder="例如：20"
+              placeholder="例如：大二、研一"
               className="w-full rounded-xl border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary-400"
             />
           </label>
@@ -87,11 +87,12 @@ export function UserProfilePrompt({
         </div>
         {error && <p className="mt-3 text-xs text-danger">{error}</p>}
         <p className="mt-4 text-[11px] leading-4 text-foreground/40">
-          资料保存在当前浏览器，提问时用于定制回答，可随时在设置中修改。
+          记忆按账号保存，提问时发送给你配置的模型以定制回答。可在设置中管理，也可通过对话修改。
         </p>
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
+            disabled={busy}
             onClick={onDismiss}
             className="rounded-lg px-4 py-2 text-sm text-foreground/60 hover:bg-muted"
           >
@@ -99,6 +100,7 @@ export function UserProfilePrompt({
           </button>
           <button
             type="submit"
+            disabled={busy}
             className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-500"
           >
             保存并开始
