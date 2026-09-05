@@ -12,10 +12,10 @@ import {
 } from "./sandbox.ts";
 
 test("仅允许授权目录及其子路径", () => {
-  const root = path.resolve("C:\\Users\\tester\\work");
+  const root = path.resolve(os.tmpdir(), "campus-agent-lexical-root");
   assert.equal(authorizePath(path.join(root, "a.txt"), [root]).ok, true);
   assert.equal(authorizePath(`${root}-outside`, [root]).ok, false);
-  assert.equal(resolveInside("..\\outside.txt", root).ok, false);
+  assert.equal(resolveInside(path.join("..", "outside.txt"), root).ok, false);
 });
 
 test("客户端目录不能越过服务端允许根目录", async () => {
