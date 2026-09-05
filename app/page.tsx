@@ -1,5 +1,6 @@
 "use client";
 
+import { emptyMemory, type UserMemory, type MemoryChange } from "./lib/memory";
 import { useChat } from "@ai-sdk/react";
 import {
   DefaultChatTransport,
@@ -107,10 +108,6 @@ function loadUserProfile(userId: string): UserProfile {
   }
 }
 
-function saveUserProfile(profile: UserProfile, userId: string): void {
-  savePreference(userScopedKey(USER_PROFILE_KEY, userId), JSON.stringify(profile));
-}
-
 function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -199,6 +196,7 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
     Record<string, string>
   >({});
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [skipIntro, setSkipIntro] = useState(false);
   const [darkMode, setDarkMode] = useState<"auto" | "light" | "dark">("auto");
   const [themeColor, setThemeColor] = useState("blue");
   const [capabilities, setCapabilities] = useState<AssistantCapabilities>({
@@ -208,9 +206,14 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
     ...EMPTY_USER_PROFILE,
   });
   const [profileDraft, setProfileDraft] = useState<UserProfileDraft>({
-    age: "",
+    grade: "",
     major: "",
   });
+  const [memory, setMemory] = useState<UserMemory>(emptyMemory);
+  const [memoryReady, setMemoryReady] = useState(false);
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  const memoryVersionRef = useRef(0);
+  const memorySavingRef = useRef(false);
   const [profilePromptOpen, setProfilePromptOpen] = useState(false);
   const [profileError, setProfileError] = useState("");
   const [authorizedDirs, setAuthorizedDirs] = useState<string[]>([]);
@@ -235,6 +238,11 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
   // 读取设置偏好
   useEffect(() => {
     // localStorage 是外部状态源，仅在首次挂载时同步一次。
+    const s = loadPreference("campus-skip-intro", "false");
+    if (s === "true") {
+      setSkipIntro(true);
+      setShowLanding(false);
+    }
     const d = loadPreference("campus-dark-mode", "auto") as
       | "auto"
       | "light"
@@ -252,19 +260,27 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
         console.warn("[agent-directories] 无法读取服务端授权：", error);
         if (!cancelled) setAuthorizedDirs([]);
       });
-    const storedProfile = loadUserProfile(user.id);
-    setUserProfile(storedProfile);
-    setProfileDraft({
-      age: storedProfile.age?.toString() ?? "",
-      major: storedProfile.major,
-    });
-    setProfilePromptOpen(!isCompleteUserProfile(storedProfile));
+    void fetch("/api/memory", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) throw new Error("无法加载记忆，请刷新后重试");
+      const stored = await response.json() as UserMemory;
+      if (cancelled) return;
+      setMemory(stored);
+      memoryVersionRef.current = stored.version;
+      setUserProfile(stored.profile);
+      // 旧浏览器资料只预填专业，年龄不会迁移或用于推算年级。
+      setProfileDraft(stored.onboarded ? stored.profile : { ...stored.profile, major: stored.profile.major || loadUserProfile(user.id).major });
+      setProfilePromptOpen(!stored.onboarded);
+      setMemoryReady(true);
+    }).catch((error) => { if (!cancelled) setProfileError(error instanceof Error ? error.message : "记忆加载失败"); });
     return () => {
       cancelled = true;
     };
   }, [user.id]);
 
   // 持久化设置
+  useEffect(() => {
+    savePreference("campus-skip-intro", String(skipIntro));
+  }, [skipIntro]);
   useEffect(() => {
     savePreference("campus-dark-mode", darkMode);
     document.documentElement.setAttribute("data-theme", darkMode === "auto" ? "" : darkMode);
@@ -383,11 +399,10 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
             ...body,
             messages: stripPendingApprovals(nextMessages),
             capabilities,
-            userProfile,
           },
         }),
       }),
-    [capabilities, userProfile],
+    [capabilities],
   );
 
   const { messages, sendMessage, status, addToolApprovalResponse } = useChat<UIMessage>({
@@ -397,6 +412,7 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
     sendAutomaticallyWhen: ({ messages: nextMessages }) =>
       lastAssistantMessageIsCompleteWithApprovalResponses({ messages: nextMessages }),
     onFinish: ({ messages: finalMessages, isAbort, isError }) => {
+      void refreshMemory().catch((error) => setProfileError(error.message));
       // 必须在此处落盘：流式过程中 messages.length 与末条消息 id 均不变，
       // 下方持久化 effect 的指纹不会变化，导致最终回复内容无法写入 localStorage
       const convoId = sentConvoIdRef.current ?? activeIdRef.current;
@@ -592,25 +608,64 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
     [userProfile],
   );
 
-  const openSettings = () => {
-    setProfileDraft({
-      age: userProfile.age?.toString() ?? "",
-      major: userProfile.major,
-    });
-    setProfileError("");
-    setSettingsOpen(true);
+  const refreshMemory = async () => {
+    const response = await fetch("/api/memory", { cache: "no-store" });
+    if (!response.ok) throw new Error("无法加载记忆，请刷新后重试");
+    const stored = await response.json() as UserMemory;
+    if (stored.version < memoryVersionRef.current) return;
+    memoryVersionRef.current = stored.version;
+    setMemory(stored);
+    setUserProfile(stored.profile);
+    setProfileDraft(stored.profile);
+    setMemoryReady(true);
   };
 
-  const commitUserProfile = () => {
+  const openSettings = () => {
+    setProfileDraft(userProfile);
+    setProfileError("");
+    setSettingsOpen(true);
+    void refreshMemory().catch((error) => setProfileError(error.message));
+  };
+
+  const changeMemory = async (change: MemoryChange): Promise<boolean> => {
+    if (!memoryReady || memorySavingRef.current) return false;
+    memorySavingRef.current = true;
+    setMemoryBusy(true);
+    setProfileError("");
+    try {
+      const response = await fetch("/api/memory", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ change, version: memoryVersionRef.current }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        if (response.status === 409) await refreshMemory();
+        throw new Error(data.error || "记忆保存失败");
+      }
+      const stored = data as UserMemory;
+      memoryVersionRef.current = stored.version;
+      setMemory(stored);
+      setUserProfile(stored.profile);
+      if (change.action === "profile") setProfileDraft(stored.profile);
+      try { window.localStorage.removeItem(userScopedKey(USER_PROFILE_KEY, user.id)); } catch { /* 服务端保存成功不受浏览器存储限制影响。 */ }
+      return true;
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : "记忆保存失败，请重试");
+      return false;
+    } finally {
+      memorySavingRef.current = false;
+      setMemoryBusy(false);
+    }
+  };
+
+  const commitUserProfile = async () => {
     const normalized = normalizeUserProfile(profileDraft);
-    if (!isCompleteUserProfile(normalized)) {
-      setProfileError("请填写 10–100 岁之间的整数年龄和专业名称。");
+    if (profilePromptOpen && !isCompleteUserProfile(normalized)) {
+      setProfileError("请填写专业和年级，例如：计算机科学、大二。");
       return false;
     }
-    setUserProfile(normalized);
-    setProfileDraft({ age: String(normalized.age), major: normalized.major });
-    saveUserProfile(normalized, user.id);
-    setProfileError("");
+    if (!await changeMemory({ action: "profile", ...normalized })) return false;
     setProfilePromptOpen(false);
     return true;
   };
@@ -694,12 +749,14 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
           </div>
         </header>
 
+        {!memoryReady && profileError && <p role="alert" className="px-4 py-2 text-sm text-danger">{profileError}</p>}
         <ChatTranscript
           messages={messages}
           suggestions={suggestions}
+          memories={memory.entries}
           profileLabel={
             isCompleteUserProfile(userProfile)
-              ? `${userProfile.age} 岁 · ${userProfile.major}`
+              ? `${userProfile.grade} · ${userProfile.major}`
               : null
           }
           exportsByMessage={exportsByMessage}
@@ -739,24 +796,29 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
         capabilities={capabilities}
         profileDraft={profileDraft}
         profileError={profileError}
+        memory={memory}
+        memoryBusy={memoryBusy || !memoryReady}
+        onMemoryChange={changeMemory}
+        skipIntro={skipIntro}
         darkMode={darkMode}
         themeColor={themeColor}
         onClose={() => setSettingsOpen(false)}
         onCapabilitiesChange={setCapabilities}
         onProfileDraftChange={setProfileDraft}
         onSaveProfile={commitUserProfile}
+        onSkipIntroChange={setSkipIntro}
         onDarkModeChange={setDarkMode}
         onThemeColorChange={setThemeColor}
       />
       <UserProfilePrompt
         open={profilePromptOpen}
+        busy={memoryBusy || !memoryReady}
         draft={profileDraft}
         error={profileError}
         onDraftChange={setProfileDraft}
         onSave={commitUserProfile}
         onDismiss={() => {
-          setProfileError("");
-          setProfilePromptOpen(false);
+          void changeMemory({ action: "dismiss" }).then((saved) => { if (saved) setProfilePromptOpen(false); });
         }}
       />
     </div>
