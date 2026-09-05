@@ -34,16 +34,6 @@
 .fresh-landing * { box-sizing: border-box; }
 .fresh-landing button { font-family: inherit; }
 
-/* ── 开场动画首屏 ── */
-.fl-intro { height: 100vh; width: 100%; }
-
-/* 过渡：开场动画 → 纯色灰（蓝绿色，衔接绿色风景与蓝色卡片） */
-.fl-bridge {
-  height: 300px;
-  margin-top: -1px;
-  background: linear-gradient(to bottom, #5fb8ac 0%, #95c9c2 42%, #bed6d2 74%, #e0e0e0 100%);
-}
-
 /* ── 导航 ── */
 .fl-nav {
   display: flex; align-items: center; justify-content: space-between;

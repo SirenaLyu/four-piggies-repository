@@ -45,14 +45,12 @@ export type SettingsDrawerProps = {
   capabilities: AssistantCapabilities;
   profileDraft: UserProfileDraft;
   profileError: string;
-  skipIntro: boolean;
   darkMode: AppearanceMode;
   themeColor: string;
   onClose: () => void;
   onCapabilitiesChange: (capabilities: AssistantCapabilities) => void;
   onProfileDraftChange: (draft: UserProfileDraft) => void;
   onSaveProfile: () => boolean;
-  onSkipIntroChange: (skip: boolean) => void;
   onDarkModeChange: (mode: AppearanceMode) => void;
   onThemeColorChange: (color: string) => void;
 };
@@ -64,14 +62,12 @@ export function SettingsDrawer({
   capabilities,
   profileDraft,
   profileError,
-  skipIntro,
   darkMode,
   themeColor,
   onClose,
   onCapabilitiesChange,
   onProfileDraftChange,
   onSaveProfile,
-  onSkipIntroChange,
   onDarkModeChange,
   onThemeColorChange,
 }: SettingsDrawerProps) {
@@ -190,23 +186,6 @@ export function SettingsDrawer({
             <p className="mt-2 text-[11px] leading-4 text-foreground/40">
               关闭的能力不会发送给模型，也不会在服务端注册对应工具。
               {controlsDisabled ? " 请等待当前操作结束后再修改。" : ""}
-            </p>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-foreground/70 mb-2 block">
-              开场动画
-            </label>
-            <label className="flex items-center gap-3 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={skipIntro}
-                onChange={(event) => onSkipIntroChange(event.target.checked)}
-                className="w-4 h-4 rounded border-border accent-primary-600"
-              />
-              <span className="text-sm text-foreground/80">跳过开场动画</span>
-            </label>
-            <p className="text-[11px] text-foreground/40 mt-1 ml-7">
-              开启后下次启动将直接进入主界面
             </p>
           </div>
           <div>

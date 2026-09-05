@@ -12,7 +12,7 @@
 
 ## 2. 功能特性
 
-- **落地页与开场动画**：新拟态（neumorphism）风格落地页、可跳过开场动画、可选 3D 校园开场。
+- **新拟态落地页**：以科大蓝和橙色为点缀，提供校园问答与常用功能入口。
 - **流式对话**：基于 AI SDK `streamText` 的流式输出，首字即回。
 - **本地多用户登录**：用户名和密码经 scrypt 哈希后保存在服务端；会话使用签名的 HttpOnly Cookie。
 - **个人模型配置**：每位用户可填写自己的 OpenAI 兼容 API URL、Key、主模型和备用模型；Key 采用 AES-256-GCM 加密保存且不回传浏览器。
@@ -46,7 +46,7 @@ four-piggies-repository/
 │   │   ├── chat/route.ts          # 核心对话接口（流式 + 工具调用）
 │   │   ├── summarize/route.ts     # 会话标题自动总结
 │   │   └── export/route.ts        # 回答导出文件生成
-│   ├── components/                # 落地页、设置及拆分后的聊天界面组件
+│   ├── components/                # 落地页、设置、Logo 及拆分后的聊天界面组件
 │   ├── lib/
 │   │   ├── ai-clients.ts          # OpenAI 兼容客户端与模型名
 │   │   ├── chat-messages.ts        # 消息与附件规范化

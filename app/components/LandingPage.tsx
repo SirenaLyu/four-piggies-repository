@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IntroAnimation } from "./IntroAnimation";
 import { Logo } from "./Logo";
 import "./LandingPage.css";
 
@@ -74,7 +73,7 @@ const FEATURES: { icon: IconName; title: string; desc: string; tag: string; cls:
 ];
 
 /**
- * 清新校园风落地页：开场动画 → 品牌 Hero（问题轮播搜索框 + 对话演示）→ 功能便签 → 进入对话。
+ * 清新校园风落地页：品牌 Hero（问题轮播搜索框 + 对话演示）→ 功能便签 → 进入对话。
  */
 export function LandingPage({ onEnter }: { onEnter: () => void }) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -137,14 +136,6 @@ export function LandingPage({ onEnter }: { onEnter: () => void }) {
 
   return (
     <div ref={rootRef} className="fresh-landing">
-      {/* 第一屏：开场动画 */}
-      <section className="fl-intro">
-        <IntroAnimation onFinish={() => rootRef.current?.scrollTo({ top: window.innerHeight, behavior: "smooth" })} />
-      </section>
-
-      {/* 过渡：天空蓝 → 纯色灰，衔接更自然 */}
-      <div className="fl-bridge" aria-hidden="true" />
-
       {/* 导航 */}
       <nav className="fl-nav">
         <div className="fl-brand">

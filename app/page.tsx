@@ -199,7 +199,6 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
     Record<string, string>
   >({});
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [skipIntro, setSkipIntro] = useState(false);
   const [darkMode, setDarkMode] = useState<"auto" | "light" | "dark">("auto");
   const [themeColor, setThemeColor] = useState("blue");
   const [capabilities, setCapabilities] = useState<AssistantCapabilities>({
@@ -236,11 +235,6 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
   // 读取设置偏好
   useEffect(() => {
     // localStorage 是外部状态源，仅在首次挂载时同步一次。
-    const s = loadPreference("campus-skip-intro", "false");
-    if (s === "true") {
-      setSkipIntro(true);
-      setShowLanding(false);
-    }
     const d = loadPreference("campus-dark-mode", "auto") as
       | "auto"
       | "light"
@@ -271,9 +265,6 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
   }, [user.id]);
 
   // 持久化设置
-  useEffect(() => {
-    savePreference("campus-skip-intro", String(skipIntro));
-  }, [skipIntro]);
   useEffect(() => {
     savePreference("campus-dark-mode", darkMode);
     document.documentElement.setAttribute("data-theme", darkMode === "auto" ? "" : darkMode);
@@ -748,14 +739,12 @@ function CampusAssistant({ user }: { user: SignedInUser }) {
         capabilities={capabilities}
         profileDraft={profileDraft}
         profileError={profileError}
-        skipIntro={skipIntro}
         darkMode={darkMode}
         themeColor={themeColor}
         onClose={() => setSettingsOpen(false)}
         onCapabilitiesChange={setCapabilities}
         onProfileDraftChange={setProfileDraft}
         onSaveProfile={commitUserProfile}
-        onSkipIntroChange={setSkipIntro}
         onDarkModeChange={setDarkMode}
         onThemeColorChange={setThemeColor}
       />
